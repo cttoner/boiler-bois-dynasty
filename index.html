@@ -1,0 +1,3897 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Dynasty League</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%230E4D33'/%3E%3Cellipse cx='50' cy='50' rx='32' ry='20' fill='%23FF6B00'/%3E%3Cpath d='M27 50h46M40 42v16M50 40v20M60 42v16' stroke='white' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E" />
+<style>
+  html, body { margin: 0; padding: 0; background: #F4FAF6; }
+  #root { min-height: 100vh; }
+</style>
+<script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-type="module">
+const { useEffect, useMemo, useState, useRef } = React;
+
+const LEAGUE_ID = "1312079841918468096";
+const API = "https://api.sleeper.app/v1";
+
+const fontImport = `
+@import url('https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+.page-wrap { max-width: 1120px; margin: 0 auto; width: 100%; }
+button { transition: opacity 0.15s ease, background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease; }
+button:hover { opacity: 0.8; }
+button:active { opacity: 0.65; }
+select { transition: border-color 0.15s ease; }
+select:hover { border-color: #0E4D33; }
+input[type="text"] { transition: border-color 0.15s ease; }
+input[type="text"]:hover, input[type="text"]:focus { border-color: #0E4D33; outline: none; }
+textarea { transition: border-color 0.15s ease; }
+textarea:hover, textarea:focus { border-color: #0E4D33; outline: none; }
+.sortable-th { transition: color 0.15s ease; }
+.sortable-th:hover { color: #0E4D33 !important; }
+@keyframes bannerSway {
+  0%, 100% { transform: rotate(-2.5deg); }
+  50% { transform: rotate(2.5deg); }
+}
+.banner-pennant {
+  transform-origin: top center;
+  animation: bannerSway 3.4s ease-in-out infinite;
+}
+.banner-pennant:nth-child(even) {
+  animation-duration: 3.9s;
+  animation-delay: -1.1s;
+}
+.banner-pennant:nth-child(3n) {
+  animation-duration: 4.4s;
+  animation-delay: -2.2s;
+}
+`;
+
+const COLORS = {
+  bg: "#F4FAF6",
+  bg2: "#0E4D33",
+  surface: "#FFFFFF",
+  surfaceLight: "#EAF4EE",
+  gold: "#FF6B00",
+  goldDim: "#D9560A",
+  goldDeep: "#B8860B",
+  goldTint: "#FFF3D6",
+  yellow: "#FFD400",
+  yellowTint: "#FFF8DB",
+  leather: "#7B4B27",
+  leatherDeep: "#5A371C",
+  leatherTint: "#F1E4D4",
+  turf: "#0E4D33",
+  turfLight: "#3F7A63",
+  turfDeep: "#0A3924",
+  turfTint: "#E1F0E7",
+  orangeTint: "#FFE6D2",
+  bone: "#12241C",
+  muted: "#6B7A70",
+  onTurf: "#FFFFFF",
+  onTurfMuted: "rgba(255,255,255,0.68)",
+  red: "#C0392B",
+  hairline: "rgba(14,77,51,0.14)",
+};
+
+// Small color families keyed to fantasy-football position groups, built from
+// the site's core turf/orange/gold/leather palette so position badges add
+// variety without introducing new hues.
+const POSITION_COLORS = {
+  QB: { bg: "#FFE6D2", fg: "#B8460D" },
+  RB: { bg: "#E1F0E7", fg: "#0E4D33" },
+  WR: { bg: "#FFF3D6", fg: "#8A6A00" },
+  TE: { bg: "#F1E4D4", fg: "#5A371C" },
+  FLEX: { bg: "#EAF4EE", fg: "#3F7A63" },
+  SUPER_FLEX: { bg: "#EAF4EE", fg: "#3F7A63" },
+  K: { bg: "#F1E4D4", fg: "#5A371C" },
+  DEF: { bg: "#FFE6D2", fg: "#B8460D" },
+};
+function positionColor(pos) {
+  return POSITION_COLORS[pos] || { bg: "#EAF4EE", fg: "#6B7A70" };
+}
+
+const INJURY_COLORS = {
+  Out: { bg: "#F1CBC0", fg: "#8A2E12" },
+  IR: { bg: "#F1CBC0", fg: "#8A2E12" },
+  PUP: { bg: "#F1CBC0", fg: "#8A2E12" },
+  Doubtful: { bg: "#FFE0C2", fg: "#B8460D" },
+  Questionable: { bg: "#FFF3D6", fg: "#8A6A00" },
+  Sus: { bg: "#F1CBC0", fg: "#8A2E12" },
+  NA: { bg: "#EAF4EE", fg: "#6B7A70" },
+};
+function injuryColor(status) {
+  return INJURY_COLORS[status] || { bg: "#EAF4EE", fg: "#6B7A70" };
+}
+
+// Sleeper's transactions/{round} endpoint appears to return round-0 (before
+// Week 1) transactions again when querying later rounds too, not just that
+// round's own moves. That duplicates any offseason trade under a later round
+// number, which would otherwise overwrite its correct "round 0" tag. Keeping
+// the lowest round ever seen for a given transaction avoids that.
+function dedupeTransactionsByMinRound(items) {
+  const map = {};
+  items.forEach((t) => {
+    const existing = map[t.transaction_id];
+    if (!existing || t._round < existing._round) {
+      map[t.transaction_id] = t;
+    }
+  });
+  return Object.values(map);
+}
+
+function useLeagueData(leagueId) {
+  const [state, setState] = useState({
+    loading: true,
+    error: null,
+    league: null,
+    users: [],
+    rosters: [],
+    players: {},
+    week: 1,
+    seasonType: "regular",
+    matchups: [],
+    transactions: [],
+    prevLeague: null,
+    prevWinnerRosterId: null,
+    seasonHistory: [],
+    weekMatchups: {},
+    tradedPicks: [],
+    draftRounds: 4,
+    currentDraftPicks: [],
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function j(url) {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`${url} -> ${res.status}`);
+      return res.json();
+    }
+
+    // Resolve champion / runner-up / third / last place for one historical season
+    async function resolveSeasonAwards(seasonLeagueId, rosters, users) {
+      const byOwner = Object.fromEntries(users.map((u) => [u.user_id, u]));
+      const rosterOwner = (rid) => {
+        const r = rosters.find((r) => r.roster_id === rid);
+        return r ? byOwner[r.owner_id] : null;
+      };
+
+      let champion = null, runnerUp = null, third = null;
+      const playoffWins = {}; // owner_id -> win count
+      const playoffLosses = {}; // owner_id -> loss count
+      try {
+        const bracket = await j(`${API}/league/${seasonLeagueId}/winners_bracket`);
+        bracket.forEach((m) => {
+          if (m.w) {
+            const winner = rosterOwner(m.w);
+            if (winner) playoffWins[winner.user_id] = (playoffWins[winner.user_id] || 0) + 1;
+          }
+          if (m.l) {
+            const loser = rosterOwner(m.l);
+            if (loser) playoffLosses[loser.user_id] = (playoffLosses[loser.user_id] || 0) + 1;
+          }
+        });
+        const final = bracket.find((m) => m.p === 1 && m.w);
+        if (final) {
+          champion = rosterOwner(final.w);
+          runnerUp = rosterOwner(final.l);
+        }
+        const thirdMatch = bracket.find((m) => m.p === 3 && m.w);
+        if (thirdMatch) third = rosterOwner(thirdMatch.w);
+      } catch (e) {
+        // no bracket available
+      }
+
+      const standings = computeStandings(rosters, users);
+      // Fallback to standings if bracket data is missing
+      if (!champion && standings[0]) {
+        champion = byOwner[rosters.find((r) => r.roster_id === standings[0].rosterId)?.owner_id];
+      }
+      const lastStanding = standings[standings.length - 1];
+      const lastPlace = lastStanding
+        ? byOwner[rosters.find((r) => r.roster_id === lastStanding.rosterId)?.owner_id]
+        : null;
+
+      // Highest single-game score across this season's completed weeks,
+      // the single best individual player performance, plus head-to-head
+      // results between every pair of owners this season.
+      let highGame = null;
+      let bestPlayerGame = null;
+      const h2h = {}; // ownerId -> opponentOwnerId -> { w, l, t }
+      const ownerWeeklyHigh = {}; // ownerId -> { points, week }
+      const ownerBestPlayerGame = {}; // ownerId -> { playerId, points, week }
+      const ownerPlayerTotals = {}; // ownerId -> { playerId: totalPoints }
+      function recordH2H(a, b, result) {
+        if (!a || !b) return;
+        if (!h2h[a]) h2h[a] = {};
+        if (!h2h[a][b]) h2h[a][b] = { w: 0, l: 0, t: 0 };
+        h2h[a][b][result]++;
+      }
+      let seasonWeekMatchups = {};
+      try {
+        const weekResults = await Promise.all(
+          Array.from({ length: 18 }, (_, i) => i + 1).map((w) =>
+            j(`${API}/league/${seasonLeagueId}/matchups/${w}`).catch(() => [])
+          )
+        );
+        weekResults.forEach((matchups, wi) => {
+          seasonWeekMatchups[wi + 1] = matchups || [];
+          (matchups || []).forEach((m) => {
+            const owner = rosterOwner(m.roster_id);
+            if (!highGame || (m.points ?? 0) > highGame.points) {
+              if (owner) highGame = { owner, points: m.points ?? 0, week: wi + 1 };
+            }
+            if (owner) {
+              const oid = owner.user_id;
+              if (!ownerWeeklyHigh[oid] || (m.points ?? 0) > ownerWeeklyHigh[oid].points) {
+                ownerWeeklyHigh[oid] = { points: m.points ?? 0, week: wi + 1 };
+              }
+              if (!ownerPlayerTotals[oid]) ownerPlayerTotals[oid] = {};
+            }
+            Object.entries(m.players_points || {}).forEach(([pid, pts]) => {
+              if (!bestPlayerGame || pts > bestPlayerGame.points) {
+                bestPlayerGame = { playerId: pid, points: pts, week: wi + 1, owner };
+              }
+              if (owner) {
+                const oid = owner.user_id;
+                if (!ownerBestPlayerGame[oid] || pts > ownerBestPlayerGame[oid].points) {
+                  ownerBestPlayerGame[oid] = { playerId: pid, points: pts, week: wi + 1 };
+                }
+                ownerPlayerTotals[oid][pid] = (ownerPlayerTotals[oid][pid] || 0) + pts;
+              }
+            });
+          });
+          const byMatchupId = {};
+          (matchups || []).forEach((m) => {
+            if (!byMatchupId[m.matchup_id]) byMatchupId[m.matchup_id] = [];
+            byMatchupId[m.matchup_id].push(m);
+          });
+          Object.values(byMatchupId).forEach((pair) => {
+            if (pair.length !== 2) return;
+            const ownerA = rosterOwner(pair[0].roster_id)?.user_id;
+            const ownerB = rosterOwner(pair[1].roster_id)?.user_id;
+            const ptsA = pair[0].points ?? 0;
+            const ptsB = pair[1].points ?? 0;
+            if (!ownerA || !ownerB) return;
+            if (ptsA === ptsB) {
+              recordH2H(ownerA, ownerB, "t");
+              recordH2H(ownerB, ownerA, "t");
+            } else if (ptsA > ptsB) {
+              recordH2H(ownerA, ownerB, "w");
+              recordH2H(ownerB, ownerA, "l");
+            } else {
+              recordH2H(ownerA, ownerB, "l");
+              recordH2H(ownerB, ownerA, "w");
+            }
+          });
+        });
+      } catch (e) {
+        // ignore, leave highGame/h2h as-is
+      }
+
+      return {
+        champion, runnerUp, third, lastPlace, standings, playoffWins, playoffLosses, highGame, h2h, bestPlayerGame,
+        ownerWeeklyHigh, ownerBestPlayerGame, ownerPlayerTotals, weekMatchups: seasonWeekMatchups,
+      };
+    }
+
+    async function fetchSeasonTrades(seasonLeagueId, season, rosters, users) {
+      const byOwner = Object.fromEntries(users.map((u) => [u.user_id, u]));
+      const rosterOwner = (rid) => {
+        const r = rosters.find((r) => r.roster_id === rid);
+        return r ? byOwner[r.owner_id] : null;
+      };
+      try {
+        const rounds = Array.from({ length: 19 }, (_, i) => i); // 0 = preseason, 1-18 = weeks
+        const results = await Promise.all(
+          rounds.map((round) =>
+            j(`${API}/league/${seasonLeagueId}/transactions/${round}`)
+              .then((arr) => (arr || []).map((t) => ({ ...t, _round: round })))
+              .catch(() => [])
+          )
+        );
+        return dedupeTransactionsByMinRound(results.flat())
+          .filter((t) => t.type === "trade" && t.status === "complete")
+          .map((t) => {
+            const ownersByRosterId = {};
+            (t.roster_ids || []).forEach((rid) => { ownersByRosterId[rid] = rosterOwner(rid); });
+            return { ...t, season, ownersByRosterId };
+          });
+      } catch (e) {
+        return [];
+      }
+    }
+
+    async function fetchSeasonDraft(seasonLeagueId, rosters, users) {
+      const byOwner = Object.fromEntries(users.map((u) => [u.user_id, u]));
+      const rosterOwner = (rid) => {
+        const r = rosters.find((r) => r.roster_id === rid);
+        return r ? byOwner[r.owner_id] : null;
+      };
+      try {
+        const draftsList = await j(`${API}/league/${seasonLeagueId}/drafts`);
+        if (!draftsList || draftsList.length === 0) return [];
+        // A season can technically have more than one draft object; pull picks
+        // from all of them and combine, in case a league ran more than one.
+        const picksByDraft = await Promise.all(
+          draftsList.map((d) => j(`${API}/draft/${d.draft_id}/picks`).catch(() => []))
+        );
+        return picksByDraft
+          .flat()
+          .map((p) => ({
+            round: p.round,
+            pickNo: p.pick_no,
+            playerId: p.player_id,
+            owner: rosterOwner(p.roster_id),
+          }))
+          .sort((a, b) => a.pickNo - b.pickNo);
+      } catch (e) {
+        return [];
+      }
+    }
+
+    async function walkHistory(startLeague) {
+      const seasons = [];
+      let cursor = startLeague.previous_league_id;
+      let guard = 0;
+      while (cursor && guard < 25) {
+        guard++;
+        try {
+          const [seasonLeague, seasonUsers, seasonRosters] = await Promise.all([
+            j(`${API}/league/${cursor}`),
+            j(`${API}/league/${cursor}/users`),
+            j(`${API}/league/${cursor}/rosters`),
+          ]);
+          const awards = await resolveSeasonAwards(cursor, seasonRosters, seasonUsers);
+          const seasonTrades = await fetchSeasonTrades(cursor, seasonLeague.season, seasonRosters, seasonUsers);
+          const draftPicks = await fetchSeasonDraft(cursor, seasonRosters, seasonUsers);
+          seasons.push({
+            season: seasonLeague.season,
+            leagueId: cursor,
+            users: seasonUsers,
+            rosters: seasonRosters,
+            trades: seasonTrades,
+            draftPicks,
+            ...awards,
+          });
+          cursor = seasonLeague.previous_league_id;
+        } catch (e) {
+          cursor = null;
+        }
+      }
+      return seasons;
+    }
+
+    async function run() {
+      try {
+        const [league, nflState] = await Promise.all([
+          j(`${API}/league/${leagueId}`),
+          j(`${API}/state/nfl`),
+        ]);
+        // Sleeper's season_type tells us whether the regular season has
+        // actually started. During preseason or the true offseason, there's
+        // no real fantasy week yet, regardless of what a raw week number
+        // might say.
+        const seasonType = nflState.season_type || "regular";
+        const isActiveSeason = seasonType === "regular" || seasonType === "post";
+        const week = isActiveSeason ? Math.max(1, nflState.week || 1) : 1;
+
+        const [users, rosters, playersRaw] = await Promise.all([
+          j(`${API}/league/${leagueId}/users`),
+          j(`${API}/league/${leagueId}/rosters`),
+          j(`${API}/players/nfl`).catch(() => ({})),
+        ]);
+
+        let matchups = [];
+        try {
+          matchups = await j(`${API}/league/${leagueId}/matchups/${week}`);
+        } catch (e) {
+          matchups = [];
+        }
+
+        // Pull transactions across weeks played so far, plus preseason (round 0)
+        const txWeeks = [0, ...Array.from({ length: week }, (_, i) => i + 1)];
+        const txResults = await Promise.all(
+          txWeeks.map((w) =>
+            j(`${API}/league/${leagueId}/transactions/${w}`)
+              .then((arr) => (arr || []).map((t) => ({ ...t, _round: w })))
+              .catch(() => [])
+          )
+        );
+        const transactions = dedupeTransactionsByMinRound(txResults.flat());
+
+        // Pull all completed weeks of matchups this season, for superlatives
+        const completedWeeks = Array.from({ length: Math.max(0, week - 1) }, (_, i) => i + 1);
+        const weekResults = await Promise.all(
+          completedWeeks.map((w) =>
+            j(`${API}/league/${leagueId}/matchups/${w}`).catch(() => [])
+          )
+        );
+        const weekMatchups = {};
+        completedWeeks.forEach((w, i) => (weekMatchups[w] = weekResults[i]));
+
+        let prevLeague = null;
+        let prevWinnerRosterId = null;
+        if (league.previous_league_id) {
+          try {
+            prevLeague = await j(`${API}/league/${league.previous_league_id}`);
+            const bracket = await j(
+              `${API}/league/${league.previous_league_id}/winners_bracket`
+            ).catch(() => []);
+            const final = bracket.find((m) => m.p === 1 && m.w);
+            if (final) prevWinnerRosterId = final.w;
+          } catch (e) {
+            prevLeague = null;
+          }
+        }
+
+        const seasonHistory = await walkHistory(league);
+
+        // Draft pick ownership: Sleeper only returns picks that have been
+        // traded away from their original owner; anything not in this list
+        // is still held by the team it originally belonged to.
+        let tradedPicks = [];
+        let draftRounds = 4;
+        let currentDraftPicks = [];
+        try {
+          tradedPicks = await j(`${API}/league/${leagueId}/traded_picks`);
+        } catch (e) {
+          tradedPicks = [];
+        }
+        try {
+          const draftsList = await j(`${API}/league/${leagueId}/drafts`);
+          const roundCounts = (draftsList || []).map((d) => d.settings?.rounds).filter((r) => r > 0);
+          if (roundCounts.length > 0) {
+            draftRounds = Math.max(...roundCounts);
+          }
+          if (draftsList && draftsList.length > 0) {
+            const byOwnerCurrent = Object.fromEntries(users.map((u) => [u.user_id, u]));
+            const rosterOwnerCurrent = (rid) => {
+              const r = rosters.find((r) => r.roster_id === rid);
+              return r ? byOwnerCurrent[r.owner_id] : null;
+            };
+            const picksByDraft = await Promise.all(
+              draftsList.map((d) => j(`${API}/draft/${d.draft_id}/picks`).catch(() => []))
+            );
+            currentDraftPicks = picksByDraft
+              .flat()
+              .map((p) => ({
+                round: p.round,
+                pickNo: p.pick_no,
+                playerId: p.player_id,
+                owner: rosterOwnerCurrent(p.roster_id),
+              }))
+              .sort((a, b) => a.pickNo - b.pickNo);
+          }
+        } catch (e) {
+          // keep defaults
+        }
+
+        if (!cancelled) {
+          setState({
+            loading: false,
+            error: null,
+            league,
+            users,
+            rosters,
+            players: playersRaw || {},
+            week,
+            seasonType,
+            matchups,
+            transactions,
+            prevLeague,
+            prevWinnerRosterId,
+            seasonHistory,
+            weekMatchups,
+            tradedPicks,
+            draftRounds,
+            currentDraftPicks,
+          });
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setState((s) => ({ ...s, loading: false, error: err.message }));
+        }
+      }
+    }
+
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [leagueId]);
+
+  return state;
+}
+
+// Prefers Sleeper's own precomputed age field; falls back to computing it
+// from birth_date for the rare player record missing it.
+function playerAge(p) {
+  if (!p) return null;
+  if (typeof p.age === "number") return p.age;
+  if (!p.birth_date) return null;
+  const bd = new Date(p.birth_date);
+  if (isNaN(bd.getTime())) return null;
+  const now = new Date();
+  let age = now.getFullYear() - bd.getFullYear();
+  const monthDiff = now.getMonth() - bd.getMonth();
+  if (monthDiff < 0 || (monthDiff === 0 && now.getDate() < bd.getDate())) age--;
+  return age;
+}
+
+function teamName(u) {
+  if (!u) return "Unknown Team";
+  return u.metadata?.team_name || u.display_name || "Unnamed Team";
+}
+
+// For any user-facing label: team name plus the manager's Sleeper handle in
+// parens, so ownership stays clear even if a team gets renamed mid-season.
+// Sleeper username -> real name (first initial + last name), for display only.
+// Anyone not in this list falls back to their raw Sleeper username.
+const REAL_NAMES = {
+  "teejray": "T. Ray",
+  "cttoner": "C. Toner",
+  "ajgrasso": "A. Grasso",
+  "njgreen": "N. Green",
+  "cameronm1315": "C. Mauck",
+  "ddesplinter": "D. Desplinter",
+  "cocobolodesk": "C. Hammoudeh",
+  "glohman": "G. Lohman",
+  "cannon1234": "C. Elsbury",
+  "kelle235": "C. Kelley",
+  "ryanforamerica": "R. Everett",
+  "gcompton26": "G. Compton",
+};
+
+function withOwner(u) {
+  if (!u) return "Unknown Team";
+  const team = teamName(u);
+  const owner = REAL_NAMES[(u.display_name || "").toLowerCase()] || u.display_name;
+  return owner && owner !== team ? `${team} (${owner})` : team;
+}
+
+function avatarUrl(u) {
+  if (u?.metadata?.avatar) return u.metadata.avatar;
+  if (u?.avatar) return `https://sleepercdn.com/avatars/thumbs/${u.avatar}`;
+  return null;
+}
+
+const SEASON_PHASE_LABELS = { pre: "Preseason", off: "Offseason" };
+function seasonPhaseText(seasonType, week) {
+  if (seasonType === "regular") return `Week ${week}`;
+  if (seasonType === "post") return `Week ${week} - Postseason`;
+  return SEASON_PHASE_LABELS[seasonType] || "Offseason";
+}
+
+function seasonPhaseColor(seasonType) {
+  if (seasonType === "regular") return { bg: "#FF6B00", fg: "#FFFFFF" };
+  if (seasonType === "post") return { bg: "#FFD400", fg: "#0A3924" };
+  if (seasonType === "pre") return { bg: "#7B4B27", fg: "#FFFFFF" };
+  return { bg: "rgba(255,255,255,0.16)", fg: "rgba(255,255,255,0.85)" };
+}
+
+function fmt(n, d = 1) {
+  if (n === undefined || n === null || Number.isNaN(n)) return "-";
+  return Number(n).toFixed(d);
+}
+
+const TEAM_PALETTE = [
+  "#1D6F4E", "#C0392B", "#B5842B", "#2E5E8C",
+  "#7B4B27", "#5B3E8C", "#1E7A6B", "#A6470D",
+];
+
+function teamColor(name) {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
+  return TEAM_PALETTE[hash % TEAM_PALETTE.length];
+}
+
+function Crest({ name, logo, size = 40 }) {
+  const initials = name
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0])
+    .join("")
+    .toUpperCase();
+  const [imgFailed, setImgFailed] = useState(false);
+
+  if (logo && !imgFailed) {
+    return (
+      <img
+        src={logo}
+        alt={name}
+        onError={() => setImgFailed(true)}
+        style={{
+          width: size,
+          height: size,
+          borderRadius: 6,
+          border: `1px solid ${COLORS.leather}`,
+          objectFit: "cover",
+          flexShrink: 0,
+          background: COLORS.surfaceLight,
+        }}
+      />
+    );
+  }
+
+  return (
+    <div
+      style={{
+        width: size,
+        height: size,
+        borderRadius: 6,
+        background: teamColor(name),
+        border: `1px solid ${COLORS.leather}`,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontFamily: "'Archivo Black', sans-serif",
+        color: "#FFFFFF",
+        fontSize: size * 0.4,
+        letterSpacing: 1,
+        flexShrink: 0,
+      }}
+    >
+      {initials}
+    </div>
+  );
+}
+
+function SectionLabel({ children }) {
+  return (
+    <div
+      style={{
+        fontFamily: "'IBM Plex Mono', monospace",
+        fontSize: 11,
+        letterSpacing: "0.14em",
+        textTransform: "uppercase",
+        color: COLORS.turfLight,
+        marginBottom: 6,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function Card({ children, style }) {
+  return (
+    <div
+      style={{
+        background: COLORS.surface,
+        border: `1px solid ${COLORS.hairline}`,
+        borderRadius: 10,
+        padding: "8px 12px",
+        ...style,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+// Head-to-head results between every pair of owners, from a { week: [...] }
+// matchups object (used for the current season, since historical seasons
+// compute this same shape during the season walk).
+// Per-owner weekly high, best individual player game, and cumulative player
+// point totals, computed from a { week: [...] } matchups object. Mirrors the
+// per-season breakdown computed during the historical season walk, so the
+// current season can be combined with past seasons using the same shape.
+function computeOwnerBreakdownFromWeeks(weekMatchups, rosters) {
+  const rosterOwnerId = (rid) => rosters.find((r) => r.roster_id === rid)?.owner_id;
+  const weeklyHigh = {};
+  const bestPlayerGame = {};
+  const playerTotals = {};
+  Object.entries(weekMatchups || {}).forEach(([week, matchups]) => {
+    (matchups || []).forEach((m) => {
+      const oid = rosterOwnerId(m.roster_id);
+      if (!oid) return;
+      if (!weeklyHigh[oid] || (m.points ?? 0) > weeklyHigh[oid].points) {
+        weeklyHigh[oid] = { points: m.points ?? 0, week: Number(week) };
+      }
+      if (!playerTotals[oid]) playerTotals[oid] = {};
+      Object.entries(m.players_points || {}).forEach(([pid, pts]) => {
+        if (!bestPlayerGame[oid] || pts > bestPlayerGame[oid].points) {
+          bestPlayerGame[oid] = { playerId: pid, points: pts, week: Number(week) };
+        }
+        playerTotals[oid][pid] = (playerTotals[oid][pid] || 0) + pts;
+      });
+    });
+  });
+  return { weeklyHigh, bestPlayerGame, playerTotals };
+}
+
+function computeH2HFromWeeks(weekMatchups, rosters, usersById) {
+  const rosterOwnerId = (rid) => rosters.find((r) => r.roster_id === rid)?.owner_id;
+  const h2h = {};
+  function record(a, b, result) {
+    if (!a || !b) return;
+    if (!h2h[a]) h2h[a] = {};
+    if (!h2h[a][b]) h2h[a][b] = { w: 0, l: 0, t: 0 };
+    h2h[a][b][result]++;
+  }
+  Object.values(weekMatchups || {}).forEach((matchups) => {
+    const byMatchupId = {};
+    (matchups || []).forEach((m) => {
+      if (!byMatchupId[m.matchup_id]) byMatchupId[m.matchup_id] = [];
+      byMatchupId[m.matchup_id].push(m);
+    });
+    Object.values(byMatchupId).forEach((pair) => {
+      if (pair.length !== 2) return;
+      const ownerA = rosterOwnerId(pair[0].roster_id);
+      const ownerB = rosterOwnerId(pair[1].roster_id);
+      const ptsA = pair[0].points ?? 0;
+      const ptsB = pair[1].points ?? 0;
+      if (!ownerA || !ownerB) return;
+      if (ptsA === ptsB) {
+        record(ownerA, ownerB, "t");
+        record(ownerB, ownerA, "t");
+      } else if (ptsA > ptsB) {
+        record(ownerA, ownerB, "w");
+        record(ownerB, ownerA, "l");
+      } else {
+        record(ownerA, ownerB, "l");
+        record(ownerB, ownerA, "w");
+      }
+    });
+  });
+  return h2h;
+}
+
+// Merge multiple { ownerId: { opponentId: {w,l,t} } } maps into one.
+function mergeH2H(maps) {
+  const merged = {};
+  maps.forEach((h2h) => {
+    Object.entries(h2h || {}).forEach(([a, opponents]) => {
+      if (!merged[a]) merged[a] = {};
+      Object.entries(opponents).forEach(([b, rec]) => {
+        if (!merged[a][b]) merged[a][b] = { w: 0, l: 0, t: 0 };
+        merged[a][b].w += rec.w;
+        merged[a][b].l += rec.l;
+        merged[a][b].t += rec.t;
+      });
+    });
+  });
+  return merged;
+}
+
+// Standard sports "games back" against the current cutoff team, plus a split
+// of who's in versus who's on the bubble. Shared by Home and Standings so
+// both pages always agree.
+function computePlayoffPicture(standings, playoffTeams) {
+  if (!playoffTeams || standings.length === 0) return { all: [], inTeams: [], bubbleTeams: [] };
+  const cutoffTeam = standings[playoffTeams - 1];
+  const all = standings.map((s, i) => {
+    const inPlayoffs = i < playoffTeams;
+    const gamesBack = inPlayoffs ? 0 : ((cutoffTeam.wins - s.wins) + (s.losses - cutoffTeam.losses)) / 2;
+    return { ...s, inPlayoffs, gamesBack };
+  });
+  return {
+    all,
+    inTeams: all.slice(0, playoffTeams),
+    bubbleTeams: all.slice(playoffTeams, playoffTeams + 3),
+  };
+}
+
+// Current win/loss/tie streak per roster, walking backward from the most
+// recent completed week of this season.
+function computeStreaks(weekMatchups, rosters) {
+  const weeks = Object.keys(weekMatchups || {}).map(Number).sort((a, b) => a - b);
+  const resultsByRoster = {}; // rosterId -> ['W'|'L'|'T', ...] in chronological order
+
+  weeks.forEach((week) => {
+    const matchups = weekMatchups[week] || [];
+    const byMatchupId = {};
+    matchups.forEach((m) => {
+      if (!byMatchupId[m.matchup_id]) byMatchupId[m.matchup_id] = [];
+      byMatchupId[m.matchup_id].push(m);
+    });
+    Object.values(byMatchupId).forEach((pair) => {
+      if (pair.length !== 2) return;
+      const [a, b] = pair;
+      const ptsA = a.points ?? 0;
+      const ptsB = b.points ?? 0;
+      let ra, rb;
+      if (ptsA === ptsB) { ra = "T"; rb = "T"; }
+      else if (ptsA > ptsB) { ra = "W"; rb = "L"; }
+      else { ra = "L"; rb = "W"; }
+      if (!resultsByRoster[a.roster_id]) resultsByRoster[a.roster_id] = [];
+      if (!resultsByRoster[b.roster_id]) resultsByRoster[b.roster_id] = [];
+      resultsByRoster[a.roster_id].push(ra);
+      resultsByRoster[b.roster_id].push(rb);
+    });
+  });
+
+  const streaks = {};
+  Object.entries(resultsByRoster).forEach(([rid, results]) => {
+    if (results.length === 0) return;
+    const last = results[results.length - 1];
+    let count = 0;
+    for (let i = results.length - 1; i >= 0; i--) {
+      if (results[i] === last) count++;
+      else break;
+    }
+    streaks[rid] = { type: last, count };
+  });
+  return streaks;
+}
+
+// "All-play" expected wins: each week, a team earns fractional credit for
+// every other team it actually outscored that week, not just its real
+// opponent. Summed across the season, this is what the schedule "should
+// have" given them based on points alone. Luck = actual wins minus this.
+function computeExpectedWins(weekMatchups) {
+  const expectedWins = {};
+  Object.values(weekMatchups || {}).forEach((matchups) => {
+    const scores = (matchups || []).map((m) => ({ rosterId: m.roster_id, points: m.points ?? 0 }));
+    const n = scores.length;
+    if (n < 2) return;
+    scores.forEach((s) => {
+      let beat = 0;
+      scores.forEach((other) => {
+        if (other.rosterId !== s.rosterId && s.points > other.points) beat++;
+      });
+      expectedWins[s.rosterId] = (expectedWins[s.rosterId] || 0) + beat / (n - 1);
+    });
+  });
+  return expectedWins;
+}
+
+// Points a specific player has scored from a given week onward, this
+// season. Only meaningful for this season, since older seasons' per-week
+// player scoring isn't kept around after the season history walk finishes.
+function computePointsSinceWeek(playerId, fromWeek, weekMatchups) {
+  let total = 0;
+  Object.entries(weekMatchups || {}).forEach(([week, matchups]) => {
+    if (Number(week) < fromWeek) return;
+    (matchups || []).forEach((m) => {
+      const pts = m.players_points?.[playerId];
+      if (pts !== undefined) total += pts;
+    });
+  });
+  return total;
+}
+
+// Draft pick ownership for upcoming seasons. Sleeper's traded_picks endpoint
+// only lists picks that have moved from their original owner, so anything
+// not present there is still held by the roster it originally belonged to.
+// Best possible lineup for one week's roster, given the league's actual
+// starting slots. A greedy fill ordered from most-restrictive slot to least
+// (single positions before flexes, flexes before superflex) is not always
+// mathematically perfect in rare edge cases, but it's the standard approach
+// for this exact problem and effectively always matches true optimal for
+// normal roster construction.
+const FLEX_ELIGIBILITY = {
+  QB: ["QB"], RB: ["RB"], WR: ["WR"], TE: ["TE"], K: ["K"], DEF: ["DEF"],
+  FLEX: ["RB", "WR", "TE"], WRRB_FLEX: ["RB", "WR"], REC_FLEX: ["WR", "TE"],
+  SUPER_FLEX: ["QB", "RB", "WR", "TE"],
+};
+
+function computeOptimalLineupPoints(playerIds, playersPoints, rosterPositions, playersDict) {
+  const slots = (rosterPositions || []).filter((p) => p !== "BN");
+  const slotOrder = [...slots].sort(
+    (a, b) => (FLEX_ELIGIBILITY[a]?.length || 99) - (FLEX_ELIGIBILITY[b]?.length || 99)
+  );
+  const available = new Set(playerIds);
+  let total = 0;
+  slotOrder.forEach((slot) => {
+    const elig = FLEX_ELIGIBILITY[slot];
+    if (!elig) return; // unrecognized slot type (e.g. IDP); skip rather than guess
+    let best = null;
+    let bestPts = -Infinity;
+    available.forEach((pid) => {
+      const p = playersDict[pid];
+      if (!p || !elig.includes(p.position)) return;
+      const pts = playersPoints[pid] ?? 0;
+      if (pts > bestPts) {
+        bestPts = pts;
+        best = pid;
+      }
+    });
+    if (best !== null) {
+      total += bestPts;
+      available.delete(best);
+    }
+  });
+  return total;
+}
+
+function computeDraftPicks(rosters, tradedPicks, draftRounds, currentSeason) {
+  const futureSeasons = [String(Number(currentSeason) + 1), String(Number(currentSeason) + 2)];
+  const rounds = Array.from({ length: draftRounds }, (_, i) => i + 1);
+
+  const tradeMap = {};
+  (tradedPicks || []).forEach((tp) => {
+    tradeMap[`${tp.season}-${tp.round}-${tp.roster_id}`] = tp.owner_id;
+  });
+
+  const allPicks = [];
+  futureSeasons.forEach((season) => {
+    rounds.forEach((round) => {
+      rosters.forEach((r) => {
+        const key = `${season}-${round}-${r.roster_id}`;
+        const currentRosterId = tradeMap[key] !== undefined ? tradeMap[key] : r.roster_id;
+        allPicks.push({
+          season,
+          round,
+          originalRosterId: r.roster_id,
+          currentRosterId,
+          traded: currentRosterId !== r.roster_id,
+        });
+      });
+    });
+  });
+  return allPicks;
+}
+
+function computeStandings(rosters, users) {
+  const byId = Object.fromEntries(users.map((u) => [u.user_id, u]));
+  return rosters
+    .map((r) => {
+      const u = byId[r.owner_id];
+      const w = r.settings?.wins ?? 0;
+      const l = r.settings?.losses ?? 0;
+      const t = r.settings?.ties ?? 0;
+      const fpts = (r.settings?.fpts ?? 0) + (r.settings?.fpts_decimal ?? 0) / 100;
+      const fptsAgainst =
+        (r.settings?.fpts_against ?? 0) + (r.settings?.fpts_against_decimal ?? 0) / 100;
+      const games = w + l + t;
+      return {
+        rosterId: r.roster_id,
+        ownerId: r.owner_id,
+        name: teamName(u),
+        displayName: withOwner(u),
+        avatar: avatarUrl(u),
+        wins: w,
+        losses: l,
+        ties: t,
+        fpts,
+        fptsAgainst,
+        winPct: games ? (w + t * 0.5) / games : 0,
+      };
+    })
+    .sort((a, b) => b.winPct - a.winPct || b.fpts - a.fpts);
+}
+
+function computePowerRankings(standings) {
+  if (standings.length === 0) return [];
+  const maxFpts = Math.max(...standings.map((s) => s.fpts), 1);
+  const scored = standings.map((s) => {
+    const winScore = s.winPct * 70;
+    const ptsScore = (s.fpts / maxFpts) * 30;
+    return { ...s, power: winScore + ptsScore };
+  });
+  scored.sort((a, b) => b.power - a.power);
+  return scored;
+}
+
+const TABS = [
+  { id: "home", label: "Home" },
+  { id: "rules", label: "Rules" },
+  { id: "standings", label: "Standings" },
+  { id: "matchups", label: "Matchups" },
+  { id: "power", label: "Power Rankings" },
+  { id: "rosters", label: "Rosters" },
+  { id: "trades", label: "Trades" },
+  { id: "picks", label: "Draft Picks" },
+  { id: "history", label: "History" },
+];
+
+function App() {
+  const data = useLeagueData(LEAGUE_ID);
+  const [tab, setTab] = useState("home");
+  const [selectedRosterId, setSelectedRosterId] = useState(null);
+
+  const usersById = useMemo(
+    () => Object.fromEntries(data.users.map((u) => [u.user_id, u])),
+    [data.users]
+  );
+  const rostersById = useMemo(
+    () => Object.fromEntries(data.rosters.map((r) => [r.roster_id, r])),
+    [data.rosters]
+  );
+  const standings = useMemo(
+    () => computeStandings(data.rosters, data.users),
+    [data.rosters, data.users]
+  );
+  const power = useMemo(() => computePowerRankings(standings), [standings]);
+  const leagueSuper = useLeagueSuperlatives(data, standings, usersById);
+
+  useEffect(() => {
+    if (data.league?.name) {
+      document.title = data.league.name;
+    }
+  }, [data.league]);
+
+  useEffect(() => {
+    if (!selectedRosterId && data.rosters.length) {
+      setSelectedRosterId(data.rosters[0].roster_id);
+    }
+  }, [data.rosters, selectedRosterId]);
+
+  const wrap = {
+    fontFamily: "'Inter', sans-serif",
+    background: COLORS.bg,
+    color: COLORS.bone,
+    minHeight: "100%",
+    width: "100%",
+  };
+
+  if (data.loading) {
+    return (
+      <div style={{ ...wrap, display: "flex", alignItems: "center", justifyContent: "center", minHeight: 400 }}>
+        <style>{fontImport}</style>
+        <div style={{ textAlign: "center" }}>
+          <div
+            style={{
+              fontFamily: "'Archivo Black', sans-serif",
+              fontSize: 22,
+              letterSpacing: 1,
+              color: COLORS.gold,
+              marginBottom: 8,
+            }}
+          >
+            LOADING THE LEAGUE
+          </div>
+          <div style={{ color: COLORS.muted, fontSize: 13 }}>
+            Pulling standings, rosters and history from Sleeper...
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (data.error) {
+    return (
+      <div style={{ ...wrap, padding: 40 }}>
+        <style>{fontImport}</style>
+        <div style={{ color: COLORS.red, fontFamily: "'IBM Plex Mono', monospace" }}>
+          Couldn't load league data ({data.error}). Check the league ID and try
+          again, or reload the artifact.
+        </div>
+      </div>
+    );
+  }
+
+  const leagueName = data.league?.name || "Dynasty League";
+
+  return (
+    <div style={wrap}>
+      <style>{fontImport}</style>
+
+      {/* Header */}
+      <div
+        style={{
+          borderBottom: `1px solid ${COLORS.hairline}`,
+          background: COLORS.bg2,
+          padding: "16px 28px 0",
+        }}
+      >
+        <div className="page-wrap">
+        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+          <div>
+            <div
+              style={{
+                fontFamily: "'Archivo Black', sans-serif",
+                fontSize: 30,
+                letterSpacing: 0.5,
+                color: COLORS.onTurf,
+                lineHeight: 1.1,
+              }}
+            >
+              {leagueName.toUpperCase()}
+            </div>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                marginTop: 4,
+                flexWrap: "wrap",
+              }}
+            >
+              <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: COLORS.onTurfMuted }}>
+                SEASON {data.league?.season}
+              </span>
+              <span
+                style={{
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 11,
+                  fontWeight: 700,
+                  padding: "2px 9px",
+                  borderRadius: 999,
+                  background: seasonPhaseColor(data.seasonType).bg,
+                  color: seasonPhaseColor(data.seasonType).fg,
+                }}
+              >
+                {seasonPhaseText(data.seasonType, data.week).toUpperCase()}
+              </span>
+              <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: COLORS.onTurfMuted }}>
+                DYNASTY
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Nav */}
+        <div style={{ display: "flex", gap: 4, marginTop: 14, flexWrap: "wrap" }}>
+          {TABS.map((t) => {
+            const active = tab === t.id;
+            return (
+              <button
+                key={t.id}
+                onClick={() => setTab(t.id)}
+                style={{
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 12,
+                  letterSpacing: "0.06em",
+                  textTransform: "uppercase",
+                  background: active ? COLORS.surface : "transparent",
+                  color: active ? COLORS.turf : COLORS.onTurfMuted,
+                  border: `1px solid ${active ? COLORS.gold : "transparent"}`,
+                  borderBottom: "none",
+                  borderRadius: "6px 6px 0 0",
+                  padding: "9px 16px",
+                  cursor: "pointer",
+                }}
+              >
+                {t.label}
+              </button>
+            );
+          })}
+        </div>
+        </div>
+      </div>
+
+      <div className="page-wrap" style={{ padding: "14px 28px 28px" }}>
+        {tab === "home" && (
+          <HomeTab
+            data={data}
+            standings={standings}
+            usersById={usersById}
+            superlatives={leagueSuper}
+            rostersById={rostersById}
+          />
+        )}
+        {tab === "rules" && <RulesTab league={data.league} />}
+        {tab === "standings" && (
+          <StandingsTab
+            standings={standings}
+            playoffTeams={data.league?.settings?.playoff_teams}
+            data={data}
+            usersById={usersById}
+          />
+        )}
+        {tab === "matchups" && (
+          <MatchupsTab
+            matchups={data.matchups}
+            rostersById={rostersById}
+            usersById={usersById}
+            week={data.week}
+            seasonType={data.seasonType}
+          />
+        )}
+        {tab === "power" && <PowerTab power={power} />}
+        {tab === "rosters" && (
+          <RostersTab
+            rosters={data.rosters}
+            usersById={usersById}
+            players={data.players}
+            selectedRosterId={selectedRosterId}
+            setSelectedRosterId={setSelectedRosterId}
+            data={data}
+            standings={standings}
+            superlatives={leagueSuper}
+          />
+        )}
+        {tab === "trades" && (
+          <TradesTab
+            transactions={data.transactions}
+            rostersById={rostersById}
+            usersById={usersById}
+            players={data.players}
+            seasonHistory={data.seasonHistory}
+            currentSeason={data.league?.season}
+            weekMatchups={data.weekMatchups}
+            seasonType={data.seasonType}
+          />
+        )}
+        {tab === "picks" && (
+          <DraftPicksTab
+            rosters={data.rosters}
+            usersById={usersById}
+            tradedPicks={data.tradedPicks}
+            draftRounds={data.draftRounds}
+            currentSeason={data.league?.season}
+            currentDraftPicks={data.currentDraftPicks}
+            seasonHistory={data.seasonHistory}
+            players={data.players}
+          />
+        )}
+        {tab === "history" && (
+          <HistoryTab
+            rostersById={rostersById}
+            usersById={usersById}
+            currentSeason={data.league?.season}
+            standings={standings}
+            seasonHistory={data.seasonHistory}
+            superlatives={leagueSuper}
+            players={data.players}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SortableTable({ columns, rows, rowKey, defaultSortKey, defaultSortDir = "desc" }) {
+  const [sort, setSort] = useState({ key: defaultSortKey, dir: defaultSortDir });
+
+  const sorted = useMemo(() => {
+    const col = columns.find((c) => c.key === sort.key);
+    if (!col) return rows;
+    const copy = [...rows];
+    copy.sort((a, b) => {
+      const av = col.accessor(a);
+      const bv = col.accessor(b);
+      if (typeof av === "string") {
+        return sort.dir === "asc" ? av.localeCompare(bv) : bv.localeCompare(av);
+      }
+      return sort.dir === "asc" ? av - bv : bv - av;
+    });
+    return copy;
+  }, [rows, sort, columns]);
+
+  function onHeaderClick(key) {
+    setSort((s) => (s.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" } : { key, dir: "desc" }));
+  }
+
+  return (
+    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+      <thead>
+        <tr style={{ background: COLORS.surfaceLight }}>
+          {columns.map((col, i) => (
+            <th
+              key={col.key}
+              className={col.sortable === false ? undefined : "sortable-th"}
+              onClick={col.sortable === false ? undefined : () => onHeaderClick(col.key)}
+              style={{
+                textAlign: col.align || (i === 0 ? "left" : "right"),
+                padding: "7px 12px",
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 11,
+                letterSpacing: "0.06em",
+                color: sort.key === col.key ? COLORS.turf : COLORS.muted,
+                textTransform: "uppercase",
+                cursor: col.sortable === false ? "default" : "pointer",
+                userSelect: "none",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {col.label}
+              {col.sortable !== false && sort.key === col.key ? (sort.dir === "asc" ? " \u25B2" : " \u25BC") : ""}
+            </th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {sorted.map((row, i) => (
+          <tr key={rowKey(row)} style={{ borderTop: `1px solid ${COLORS.hairline}`, background: row.rowBg || "transparent" }}>
+            {columns.map((col, ci) => (
+              <td
+                key={col.key}
+                style={{
+                  padding: "8px 12px",
+                  textAlign: col.align || (ci === 0 ? "left" : "right"),
+                  fontFamily: ci === 0 ? undefined : "'IBM Plex Mono', monospace",
+                  color: col.color ? col.color(row) : undefined,
+                  fontWeight: col.bold && col.bold(row) ? 700 : undefined,
+                }}
+              >
+                {col.render ? col.render(row, i) : col.accessor(row)}
+              </td>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function heatColor(pct) {
+  // Lerp between a rust/loss anchor and the turf/win anchor.
+  const lossRGB = [193, 73, 10];
+  const winRGB = [14, 77, 51];
+  const p = Math.max(0, Math.min(1, pct));
+  const r = Math.round(lossRGB[0] + (winRGB[0] - lossRGB[0]) * p);
+  const g = Math.round(lossRGB[1] + (winRGB[1] - lossRGB[1]) * p);
+  const b = Math.round(lossRGB[2] + (winRGB[2] - lossRGB[2]) * p);
+  return { bg: `rgba(${r},${g},${b},0.22)`, solid: `rgb(${r},${g},${b})` };
+}
+
+function shortLabel(u) {
+  if (!u) return "?";
+  const real = REAL_NAMES[(u.display_name || "").toLowerCase()];
+  if (real) return real.split(". ")[1] || real;
+  return (u.display_name || "?").slice(0, 8);
+}
+
+function StandingsTab({ standings, playoffTeams, data, usersById }) {
+  const [mode, setMode] = useState("season");
+  const { seasonHistory, weekMatchups, rosters, users } = data;
+
+  const ownerDirectory = useMemo(() => {
+    const map = {};
+    [...seasonHistory].sort((a, b) => Number(a.season) - Number(b.season)).forEach((s) => {
+      (s.users || []).forEach((u) => { map[u.user_id] = u; });
+    });
+    users.forEach((u) => { map[u.user_id] = u; });
+    return map;
+  }, [seasonHistory, users]);
+
+  const playoffPicture = useMemo(() => computePlayoffPicture(standings, playoffTeams), [standings, playoffTeams]);
+
+  const streaks = useMemo(() => computeStreaks(weekMatchups, rosters), [weekMatchups, rosters]);
+  const expectedWins = useMemo(() => computeExpectedWins(weekMatchups), [weekMatchups]);
+
+  const seasonRows = useMemo(() => {
+    return standings.map((s, i) => {
+      const picture = playoffPicture.all[i];
+      return {
+        ...s,
+        rowBg: playoffTeams && i < playoffTeams ? COLORS.turfTint : "transparent",
+        isPlayoffPosition: playoffTeams && i < playoffTeams,
+        gamesBack: picture ? picture.gamesBack : 0,
+        streak: streaks[s.rosterId] || null,
+        expectedWins: expectedWins[s.rosterId] || 0,
+        luck: s.wins - (expectedWins[s.rosterId] || 0),
+      };
+    });
+  }, [standings, playoffTeams, playoffPicture, streaks, expectedWins]);
+
+  const allTimeStandings = useMemo(() => {
+    const career = {};
+    const allSeasonStandings = [...seasonHistory.map((s) => s.standings || []), standings];
+    allSeasonStandings.forEach((seasonStandings) => {
+      seasonStandings.forEach((s) => {
+        if (!s.ownerId) return;
+        if (!career[s.ownerId]) career[s.ownerId] = { wins: 0, losses: 0, ties: 0, fpts: 0, fptsAgainst: 0, playoffWins: 0, playoffLosses: 0 };
+        career[s.ownerId].wins += s.wins;
+        career[s.ownerId].losses += s.losses;
+        career[s.ownerId].ties += s.ties;
+        career[s.ownerId].fpts += s.fpts;
+        career[s.ownerId].fptsAgainst += s.fptsAgainst;
+      });
+    });
+    seasonHistory.forEach((season) => {
+      Object.entries(season.playoffWins || {}).forEach(([ownerId, wins]) => {
+        if (!career[ownerId]) career[ownerId] = { wins: 0, losses: 0, ties: 0, fpts: 0, fptsAgainst: 0, playoffWins: 0, playoffLosses: 0 };
+        career[ownerId].playoffWins += wins;
+      });
+      Object.entries(season.playoffLosses || {}).forEach(([ownerId, losses]) => {
+        if (!career[ownerId]) career[ownerId] = { wins: 0, losses: 0, ties: 0, fpts: 0, fptsAgainst: 0, playoffWins: 0, playoffLosses: 0 };
+        career[ownerId].playoffLosses += losses;
+      });
+    });
+    return Object.entries(career)
+      .map(([ownerId, c]) => {
+        const games = c.wins + c.losses + c.ties;
+        return {
+          ownerId,
+          user: ownerDirectory[ownerId],
+          ...c,
+          games,
+          winPct: games ? (c.wins + c.ties * 0.5) / games : 0,
+        };
+      })
+      .sort((a, b) => b.winPct - a.winPct || b.fpts - a.fpts);
+  }, [seasonHistory, standings, ownerDirectory]);
+
+  const combinedH2H = useMemo(() => {
+    const currentH2H = computeH2HFromWeeks(weekMatchups, rosters, usersById);
+    return mergeH2H([...seasonHistory.map((s) => s.h2h || {}), currentH2H]);
+  }, [seasonHistory, weekMatchups, rosters, usersById]);
+
+  const h2hOwnerOrder = allTimeStandings.map((s) => s.ownerId);
+
+  const seasonColumns = [
+    { key: "rank", label: "#", align: "left", sortable: false, accessor: () => 0, render: (r, i) => i + 1 },
+    {
+      key: "team",
+      label: "Team",
+      align: "left",
+      accessor: (r) => r.displayName,
+      render: (r) => (
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <Crest name={r.name} logo={r.avatar} size={24} />
+          <span style={{ fontWeight: 600, color: r.isPlayoffPosition ? COLORS.turf : COLORS.bone }}>{r.displayName}</span>
+        </div>
+      ),
+    },
+    { key: "wins", label: "W", accessor: (r) => r.wins },
+    { key: "losses", label: "L", accessor: (r) => r.losses },
+    { key: "ties", label: "T", accessor: (r) => r.ties },
+    { key: "fpts", label: "PF", accessor: (r) => r.fpts, color: () => COLORS.gold, render: (r) => fmt(r.fpts) },
+    { key: "fptsAgainst", label: "PA", accessor: (r) => r.fptsAgainst, color: () => COLORS.muted, render: (r) => fmt(r.fptsAgainst) },
+    { key: "winPct", label: "Win %", accessor: (r) => r.winPct, render: (r) => `${fmt(r.winPct * 100, 0)}%` },
+    {
+      key: "streak",
+      label: "Streak",
+      accessor: (r) => (r.streak ? (r.streak.type === "W" ? 1 : r.streak.type === "L" ? -1 : 0) * r.streak.count : 0),
+      render: (r) => {
+        if (!r.streak) return "-";
+        const isWin = r.streak.type === "W";
+        const isTie = r.streak.type === "T";
+        const bg = isTie ? COLORS.surfaceLight : isWin ? COLORS.turfTint : COLORS.orangeTint;
+        const fg = isTie ? COLORS.muted : isWin ? COLORS.turf : COLORS.leatherDeep;
+        const Icon = isTie ? null : isWin ? UpArrowIcon : DownArrowIcon;
+        return (
+          <span
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              padding: "3px 9px",
+              borderRadius: 999,
+              background: bg,
+              color: fg,
+              fontWeight: 700,
+              fontSize: 11,
+              fontFamily: "'IBM Plex Mono', monospace",
+            }}
+          >
+            {Icon && <Icon size={11} />}
+            {r.streak.type}{r.streak.count}
+          </span>
+        );
+      },
+    },
+    {
+      key: "luck",
+      label: "Luck",
+      accessor: (r) => r.luck,
+      color: (r) => (r.luck >= 0 ? COLORS.turf : COLORS.leatherDeep),
+      render: (r) => `${r.luck >= 0 ? "+" : ""}${fmt(r.luck, 1)}`,
+    },
+  ];
+
+  const allTimeColumns = [
+    { key: "rank", label: "#", align: "left", sortable: false, accessor: () => 0, render: (r, i) => i + 1 },
+    {
+      key: "team",
+      label: "Manager",
+      align: "left",
+      accessor: (r) => withOwner(r.user),
+      render: (r) => (
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <Crest name={teamName(r.user)} logo={avatarUrl(r.user)} size={24} />
+          <span style={{ fontWeight: 600 }}>{withOwner(r.user)}</span>
+        </div>
+      ),
+    },
+    { key: "wins", label: "W", accessor: (r) => r.wins },
+    { key: "losses", label: "L", accessor: (r) => r.losses },
+    { key: "ties", label: "T", accessor: (r) => r.ties },
+    { key: "fpts", label: "PF", accessor: (r) => r.fpts, color: () => COLORS.gold, render: (r) => fmt(r.fpts) },
+    { key: "fptsAgainst", label: "PA", accessor: (r) => r.fptsAgainst, color: () => COLORS.muted, render: (r) => fmt(r.fptsAgainst) },
+    { key: "winPct", label: "Win %", accessor: (r) => r.winPct, render: (r) => `${fmt(r.winPct * 100, 0)}%` },
+    {
+      key: "playoffRecord",
+      label: "Playoff W-L",
+      accessor: (r) => r.playoffWins - r.playoffLosses,
+      render: (r) => (r.playoffWins || r.playoffLosses ? `${r.playoffWins}-${r.playoffLosses}` : "-"),
+    },
+  ];
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 4, marginBottom: 12 }}>
+        {[["season", "This season"], ["allTime", "All time"]].map(([id, label]) => (
+          <button
+            key={id}
+            onClick={() => setMode(id)}
+            style={{
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 12,
+              padding: "7px 14px",
+              borderRadius: 6,
+              border: `1px solid ${mode === id ? COLORS.turf : COLORS.hairline}`,
+              background: mode === id ? COLORS.turfTint : "transparent",
+              color: mode === id ? COLORS.turf : COLORS.muted,
+              cursor: "pointer",
+              fontWeight: mode === id ? 600 : 400,
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {mode === "season" ? (
+        <div>
+          <SectionLabel>Current standings</SectionLabel>
+          <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
+            Every game counts twice in a dynasty: once for this year's trophy, once for next year's draft slot. Get
+            comfortable, this list doesn't lie. Click a column to sort.
+          </div>
+          <Card style={{ padding: 0, overflow: "hidden" }}>
+            <div style={{ overflowX: "auto" }}>
+              <SortableTable columns={seasonColumns} rows={seasonRows} rowKey={(r) => r.rosterId} defaultSortKey="winPct" />
+            </div>
+          </Card>
+          {playoffTeams ? (
+            <div style={{ fontSize: 11, color: COLORS.muted, marginTop: 8 }}>
+              <span style={{ display: "inline-block", width: 10, height: 10, background: COLORS.turfTint, border: `1px solid ${COLORS.turf}`, borderRadius: 2, marginRight: 6, verticalAlign: "middle" }} />
+              Currently in playoff position (top {playoffTeams}). This stays tied to actual record even if you sort
+              by another column. Luck compares actual wins to how many teams you'd have beaten each week if everyone
+              played everyone, positive means your record is running ahead of your points, negative means it's not.
+            </div>
+          ) : null}
+        </div>
+      ) : (
+        <div>
+          <SectionLabel>All-time overall standings</SectionLabel>
+          <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
+            Every linked season combined. This is the receipt. Click a column to sort.
+          </div>
+          <Card style={{ padding: 0, overflow: "hidden", marginBottom: 20 }}>
+            <div style={{ overflowX: "auto" }}>
+              <SortableTable columns={allTimeColumns} rows={allTimeStandings} rowKey={(r) => r.ownerId} defaultSortKey="winPct" />
+            </div>
+          </Card>
+
+          <SectionLabel>Head-to-head</SectionLabel>
+          <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
+            Each cell is the row manager's all-time record against the column manager. Greener means they own that
+            matchup and know it. Rustier means it might be time to quietly retire that rivalry.
+          </div>
+          <Card style={{ padding: 8, overflowX: "auto" }}>
+            <table style={{ borderCollapse: "collapse" }}>
+              <thead>
+                <tr>
+                  <th style={{ padding: 4 }} />
+                  {h2hOwnerOrder.map((oid) => (
+                    <th key={oid} style={{ padding: 4, textAlign: "center", width: 52 }}>
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
+                        <Crest name={teamName(ownerDirectory[oid])} logo={avatarUrl(ownerDirectory[oid])} size={22} />
+                        <span style={{ fontSize: 9, color: COLORS.muted, fontFamily: "'IBM Plex Mono', monospace", lineHeight: 1.1, textAlign: "center" }}>
+                          {shortLabel(ownerDirectory[oid])}
+                        </span>
+                      </div>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {h2hOwnerOrder.map((rowId) => (
+                  <tr key={rowId}>
+                    <td style={{ padding: "2px 8px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
+                        <Crest name={teamName(ownerDirectory[rowId])} logo={avatarUrl(ownerDirectory[rowId])} size={22} />
+                        <span style={{ fontSize: 11, fontWeight: 600 }}>{withOwner(ownerDirectory[rowId])}</span>
+                      </div>
+                    </td>
+                    {h2hOwnerOrder.map((colId) => {
+                      if (colId === rowId) {
+                        return (
+                          <td key={colId} style={{ padding: 2 }}>
+                            <div style={{ width: 46, height: 32, background: COLORS.surfaceLight, borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center", color: COLORS.muted, fontSize: 11 }}>
+                              -
+                            </div>
+                          </td>
+                        );
+                      }
+                      const rec = combinedH2H[rowId]?.[colId];
+                      const games = rec ? rec.w + rec.l + rec.t : 0;
+                      const pct = games ? (rec.w + rec.t * 0.5) / games : 0.5;
+                      const { bg, solid } = games ? heatColor(pct) : { bg: COLORS.surfaceLight, solid: COLORS.muted };
+                      return (
+                        <td key={colId} style={{ padding: 2 }}>
+                          <div
+                            style={{
+                              width: 46,
+                              height: 32,
+                              background: bg,
+                              borderRadius: 4,
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              fontFamily: "'IBM Plex Mono', monospace",
+                              fontSize: 11,
+                              fontWeight: 600,
+                              color: games ? solid : COLORS.muted,
+                            }}
+                          >
+                            {games ? `${rec.w}-${rec.l}${rec.t ? `-${rec.t}` : ""}` : "-"}
+                          </div>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Card>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MatchupsTab({ matchups, rostersById, usersById, week, seasonType }) {
+  const grouped = useMemo(() => {
+    const byMatchupId = {};
+    matchups.forEach((m) => {
+      if (!byMatchupId[m.matchup_id]) byMatchupId[m.matchup_id] = [];
+      byMatchupId[m.matchup_id].push(m);
+    });
+    return Object.values(byMatchupId);
+  }, [matchups]);
+
+  const isActiveSeason = seasonType === "regular" || seasonType === "post";
+
+  if (!isActiveSeason) {
+    return (
+      <div>
+        <SectionLabel>Matchups</SectionLabel>
+        <Card>
+          <div style={{ color: COLORS.muted }}>
+            {seasonType === "pre"
+              ? "Still preseason. Real fantasy matchups kick off once the regular season starts."
+              : "It's the offseason. Check back once the new season is set up."}
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
+  if (grouped.length === 0) {
+    return (
+      <div>
+        <SectionLabel>Week {week} Matchups</SectionLabel>
+        <Card>
+          <div style={{ color: COLORS.muted, borderLeft: `3px solid ${COLORS.leather}`, paddingLeft: 10 }}>No matchup data posted for this week yet.</div>
+        </Card>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <SectionLabel>Week {week} Matchups</SectionLabel>
+      <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
+        Head to head, winner takes the bragging rights and the loser takes the group chat abuse. That's the deal.
+      </div>
+      <BalancedGrid
+        items={grouped.map((pair, i) => {
+          const [a, b] = pair;
+          const teamA = usersById[rostersById[a?.roster_id]?.owner_id];
+          const teamB = b ? usersById[rostersById[b?.roster_id]?.owner_id] : null;
+          const nameA = teamName(teamA);
+          const nameB = b ? teamName(teamB) : "BYE";
+          const labelA = withOwner(teamA);
+          const labelB = b ? withOwner(teamB) : "BYE";
+          const scoreA = a?.points ?? 0;
+          const scoreB = b?.points ?? 0;
+          const aLeads = scoreA >= scoreB;
+          return {
+            key: i,
+            node: (
+              <Card>
+                <MatchupRow name={nameA} label={labelA} logo={avatarUrl(teamA)} score={scoreA} leading={aLeads && !!b} />
+                <div style={{ height: 1, background: COLORS.hairline, margin: "10px 0" }} />
+                <MatchupRow name={nameB} label={labelB} logo={b ? avatarUrl(teamB) : null} score={scoreB} leading={!aLeads && !!b} />
+              </Card>
+            ),
+          };
+        })}
+      />
+    </div>
+  );
+}
+
+function MatchupRow({ name, label, logo, score, leading }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <Crest name={name} logo={logo} size={28} />
+        <span style={{ fontWeight: leading ? 700 : 500, color: leading ? COLORS.bone : COLORS.muted }}>
+          {label}
+        </span>
+      </div>
+      <span
+        style={{
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: 18,
+          color: leading ? COLORS.gold : COLORS.muted,
+        }}
+      >
+        {fmt(score)}
+      </span>
+    </div>
+  );
+}
+
+function PowerTab({ power }) {
+  const maxPower = Math.max(...power.map((p) => p.power), 1);
+  return (
+    <div>
+      <SectionLabel>Power Rankings</SectionLabel>
+      <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
+        Not the standings. Your record can lie, this can't. This is who's actually playing good football right now.
+      </div>
+      <Card style={{ padding: "7px 12px" }}>
+        {power.map((p, i) => {
+          const tierColor = i === 0 ? COLORS.yellow : i === 1 ? COLORS.turfLight : i === 2 ? COLORS.leather : COLORS.surfaceLight;
+          const barColor = i === 0 ? COLORS.gold : i === 1 ? COLORS.turf : i === 2 ? COLORS.leatherDeep : COLORS.muted;
+          return (
+          <div
+            key={p.rosterId}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 14,
+              padding: "12px 4px",
+              borderTop: i === 0 ? "none" : `1px solid ${COLORS.hairline}`,
+            }}
+          >
+            <div
+              style={{
+                fontFamily: "'Archivo Black', sans-serif",
+                fontSize: i < 3 ? 15 : 20,
+                color: i < 3 ? "#FFFFFF" : COLORS.muted,
+                width: 28,
+                height: i < 3 ? 28 : "auto",
+                borderRadius: i < 3 ? "50%" : 0,
+                background: i < 3 ? tierColor : "transparent",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              {i + 1}
+            </div>
+            <Crest name={p.name} logo={p.avatar} size={34} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 600 }}>{p.displayName}</div>
+              <div style={{ position: "relative", height: 6, background: COLORS.surfaceLight, borderRadius: 3, marginTop: 6 }}>
+                <div
+                  style={{
+                    position: "absolute",
+                    left: 0,
+                    top: 0,
+                    bottom: 0,
+                    width: `${(p.power / maxPower) * 100}%`,
+                    background: barColor,
+                    borderRadius: 3,
+                  }}
+                />
+              </div>
+            </div>
+            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: COLORS.muted, textAlign: "right", width: 80 }}>
+              {fmt(p.wins, 0)}-{fmt(p.losses, 0)}<br />
+              {fmt(p.fpts)} PF
+            </div>
+          </div>
+          );
+        })}
+      </Card>
+      <div style={{ marginTop: 10, fontSize: 12, color: COLORS.muted }}>
+        Power score blends win percentage (70%) with points scored (30%). Swap in your own weekly commentary once you're
+        ready to add trash talk.
+      </div>
+    </div>
+  );
+}
+
+function RostersTab({ rosters, usersById, players, selectedRosterId, setSelectedRosterId, data, standings, superlatives }) {
+  const roster = rosters.find((r) => r.roster_id === selectedRosterId) || rosters[0];
+  const owner = usersById[roster?.owner_id];
+  const ownerId = roster?.owner_id;
+
+  const trophyCase = useMemo(() => {
+    if (!ownerId) return null;
+    const seasons = data.seasonHistory || [];
+    const podium = { first: [], second: [], third: [] };
+    seasons.forEach((s) => {
+      if (s.champion?.user_id === ownerId) podium.first.push(s.season);
+      if (s.runnerUp?.user_id === ownerId) podium.second.push(s.season);
+      if (s.third?.user_id === ownerId) podium.third.push(s.season);
+    });
+    const shameYears = (superlatives.wallOfShame || [])
+      .filter((s) => s.lastPlace?.user_id === ownerId)
+      .map((s) => s.season);
+
+    const at = superlatives.allTimeSuperlatives || {};
+    const records = [];
+    if (superlatives.mostTitles?.user?.user_id === ownerId) records.push("Most titles");
+    if (at.mostPlayoffWins?.ownerId === ownerId) records.push("Most playoff wins");
+    if (at.bestWinPct?.ownerId === ownerId) records.push("Best win %");
+    if (at.bestPPG?.ownerId === ownerId) records.push("Highest career PPG");
+    if (at.bestSeason?.ownerId === ownerId) records.push("Best regular season");
+    if (at.highestScoringSeason?.ownerId === ownerId) records.push("Highest scoring season");
+    if (at.singleGame?.owner?.user_id === ownerId) records.push("Highest scoring week");
+    if (at.bestPlayerRecord?.owner?.user_id === ownerId) records.push("Single-game record");
+
+    return { podium, shameYears, records };
+  }, [ownerId, data.seasonHistory, superlatives]);
+
+  // Actual vs. best-possible lineup, week by week, for the selected roster.
+  // Reconstructed straight from each week's matchup data (which carries the
+  // full roster and per-player points for that week), not from the current
+  // roster snapshot, so it's accurate even for weeks where the roster has
+  // since changed.
+  const lineupIQ = useMemo(() => {
+    if (!roster) return null;
+    const rosterPositions = data.league?.roster_positions || [];
+    const weeks = Object.keys(data.weekMatchups || {}).map(Number).sort((a, b) => a - b);
+    const byWeek = [];
+    let totalActual = 0;
+    let totalOptimal = 0;
+    weeks.forEach((week) => {
+      const matchups = data.weekMatchups[week] || [];
+      const m = matchups.find((mm) => mm.roster_id === roster.roster_id);
+      if (!m) return;
+      const actual = m.points ?? 0;
+      const optimal = computeOptimalLineupPoints(m.players || [], m.players_points || {}, rosterPositions, players);
+      totalActual += actual;
+      totalOptimal += optimal;
+      byWeek.push({ week, actual, optimal, left: Math.max(0, optimal - actual) });
+    });
+    return { byWeek, totalActual, totalOptimal, totalLeft: Math.max(0, totalOptimal - totalActual) };
+  }, [roster, data.weekMatchups, data.league, players]);
+
+  function playerInfo(pid) {
+    const p = players[pid];
+    if (!p) return { name: pid, position: null, team: null, age: null, injuryStatus: null };
+    return {
+      name: `${p.first_name || ""} ${p.last_name || ""}`.trim() || pid,
+      position: p.position || null,
+      team: p.team || null,
+      age: playerAge(p),
+      injuryStatus: p.injury_status || null,
+    };
+  }
+  function playerLabel(pid) {
+    const p = players?.[pid];
+    if (!p) return pid;
+    return `${p.first_name || ""} ${p.last_name || ""}`.trim() || pid;
+  }
+
+  const currentOwnerBreakdown = useMemo(
+    () => computeOwnerBreakdownFromWeeks(data.weekMatchups, rosters),
+    [data.weekMatchups, rosters]
+  );
+
+  const teamSuperlatives = useMemo(() => {
+    if (!ownerId) return null;
+    let bestGame = null;
+    let bestWeek = null;
+    let bestSeasonRecord = null;
+    let bestSeasonPoints = null;
+    const cumulativeTotals = {};
+
+    const seasonsToCheck = [
+      ...(data.seasonHistory || []).map((s) => ({
+        season: s.season,
+        weeklyHigh: s.ownerWeeklyHigh?.[ownerId],
+        bestPlayerGame: s.ownerBestPlayerGame?.[ownerId],
+        playerTotals: s.ownerPlayerTotals?.[ownerId] || {},
+        standingsEntry: (s.standings || []).find((st) => st.ownerId === ownerId),
+      })),
+      {
+        season: data.league?.season,
+        weeklyHigh: currentOwnerBreakdown.weeklyHigh[ownerId],
+        bestPlayerGame: currentOwnerBreakdown.bestPlayerGame[ownerId],
+        playerTotals: currentOwnerBreakdown.playerTotals[ownerId] || {},
+        standingsEntry: standings.find((st) => st.ownerId === ownerId),
+      },
+    ];
+
+    seasonsToCheck.forEach((s) => {
+      if (s.weeklyHigh && (!bestWeek || s.weeklyHigh.points > bestWeek.points)) {
+        bestWeek = { ...s.weeklyHigh, season: s.season };
+      }
+      if (s.bestPlayerGame && (!bestGame || s.bestPlayerGame.points > bestGame.points)) {
+        bestGame = { ...s.bestPlayerGame, season: s.season };
+      }
+      if (s.standingsEntry) {
+        const games = s.standingsEntry.wins + s.standingsEntry.losses + s.standingsEntry.ties;
+        const pct = games ? (s.standingsEntry.wins + s.standingsEntry.ties * 0.5) / games : 0;
+        if (!bestSeasonRecord || pct > bestSeasonRecord.pct) {
+          bestSeasonRecord = { wins: s.standingsEntry.wins, losses: s.standingsEntry.losses, ties: s.standingsEntry.ties, season: s.season, pct };
+        }
+        if (!bestSeasonPoints || s.standingsEntry.fpts > bestSeasonPoints.fpts) {
+          bestSeasonPoints = { fpts: s.standingsEntry.fpts, season: s.season };
+        }
+      }
+      Object.entries(s.playerTotals).forEach(([pid, pts]) => {
+        cumulativeTotals[pid] = (cumulativeTotals[pid] || 0) + pts;
+      });
+    });
+
+    return { bestGame, bestWeek, bestSeasonRecord, bestSeasonPoints, cumulativeTotals };
+  }, [ownerId, data.seasonHistory, currentOwnerBreakdown, standings, data.league]);
+
+  const topByPosition = useMemo(() => {
+    if (!teamSuperlatives) return [];
+    const currentRosterSet = new Set(roster?.players || []);
+    const buckets = {};
+    Object.entries(teamSuperlatives.cumulativeTotals).forEach(([pid, pts]) => {
+      const pos = players[pid]?.position;
+      if (!pos) return;
+      if (!buckets[pos] || pts > buckets[pos].points) {
+        buckets[pos] = { playerId: pid, points: pts, stillOnRoster: currentRosterSet.has(pid) };
+      }
+    });
+    const order = ["QB", "RB", "WR", "TE", "K", "DEF"];
+    return Object.entries(buckets)
+      .sort(([a], [b]) => {
+        const ai = order.indexOf(a), bi = order.indexOf(b);
+        return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+      })
+      .map(([pos, v]) => ({ pos, ...v }));
+  }, [teamSuperlatives, roster, players]);
+
+  return (
+    <div>
+      <SectionLabel>Rosters</SectionLabel>
+      <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
+        Every player, every team. This is the actual roster of assets you're betting your season, and your ego, on.
+      </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+        {rosters.map((r) => {
+          const u = usersById[r.owner_id];
+          const active = r.roster_id === (roster?.roster_id);
+          return (
+            <button
+              key={r.roster_id}
+              onClick={() => setSelectedRosterId(r.roster_id)}
+              style={{
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 12,
+                padding: "8px 14px",
+                borderRadius: 6,
+                border: `1px solid ${active ? COLORS.gold : COLORS.hairline}`,
+                background: active ? COLORS.surfaceLight : "transparent",
+                color: active ? COLORS.gold : COLORS.muted,
+                cursor: "pointer",
+              }}
+            >
+              {withOwner(u)}
+              {data.league?.settings?.waiver_budget > 0 && (
+                <span style={{ marginLeft: 6, opacity: 0.75 }}>
+                  ${Math.max(0, data.league.settings.waiver_budget - (r.settings?.waiver_budget_used || 0))}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {roster && (
+        <>
+          <SectionLabel>Trophy case</SectionLabel>
+          <Card style={{ marginBottom: 12 }}>
+            {trophyCase && (trophyCase.podium.first.length || trophyCase.podium.second.length || trophyCase.podium.third.length || trophyCase.shameYears.length || trophyCase.records.length) ? (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                {trophyCase.podium.first.length > 0 && (
+                  <TrophyChip icon={TrophyIcon} label={`1st x${trophyCase.podium.first.length} (${trophyCase.podium.first.join(", ")})`} color={COLORS.gold} />
+                )}
+                {trophyCase.podium.second.length > 0 && (
+                  <TrophyChip icon={TrophyIcon} label={`2nd x${trophyCase.podium.second.length} (${trophyCase.podium.second.join(", ")})`} color={COLORS.turfLight} />
+                )}
+                {trophyCase.podium.third.length > 0 && (
+                  <TrophyChip icon={TrophyIcon} label={`3rd x${trophyCase.podium.third.length} (${trophyCase.podium.third.join(", ")})`} color={COLORS.leather} />
+                )}
+                {trophyCase.shameYears.length > 0 && (
+                  <TrophyChip icon={DownArrowIcon} label={`Wall of shame x${trophyCase.shameYears.length} (${trophyCase.shameYears.join(", ")})`} color={COLORS.leatherDeep} />
+                )}
+                {trophyCase.records.map((r) => (
+                  <TrophyChip key={r} icon={StarIcon} label={r} color={COLORS.goldDeep} />
+                ))}
+              </div>
+            ) : (
+              <div style={{ color: COLORS.muted, fontSize: 13, borderLeft: `3px solid ${COLORS.leather}`, paddingLeft: 10 }}>No hardware yet. Plenty of season left to change that.</div>
+            )}
+          </Card>
+
+          <Card style={{ marginBottom: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10, flexWrap: "wrap" }}>
+              <Crest name={teamName(owner)} logo={avatarUrl(owner)} size={40} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 16 }}>{withOwner(owner)}</div>
+              </div>
+              {data.league?.settings?.waiver_budget > 0 && (
+                <div
+                  style={{
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    padding: "5px 12px",
+                    borderRadius: 999,
+                    background: COLORS.turfTint,
+                    color: COLORS.turf,
+                  }}
+                >
+                  ${Math.max(0, data.league.settings.waiver_budget - (roster.settings?.waiver_budget_used || 0))} FAAB left
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <div>
+                <SectionLabel>Starters</SectionLabel>
+                {(roster.starters || []).map((pid, i) => (
+                  <PlayerRow key={i} info={playerInfo(pid)} first={i === 0} />
+                ))}
+              </div>
+              <div>
+                <SectionLabel>Bench</SectionLabel>
+                {(roster.players || [])
+                  .filter((pid) => !(roster.starters || []).includes(pid))
+                  .map((pid, i) => (
+                    <PlayerRow key={i} info={playerInfo(pid)} first={i === 0} muted />
+                  ))}
+              </div>
+            </div>
+          </Card>
+
+          <SectionLabel>Lineup IQ</SectionLabel>
+          {lineupIQ && lineupIQ.byWeek.length > 0 ? (
+            <>
+              <div style={{ fontSize: 11, color: COLORS.muted, marginBottom: 10 }}>
+                Actual points started versus the best lineup humanly possible that week. Points "left on the bench"
+                are the wins you cost yourself by not doing your homework.
+              </div>
+              <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
+                <div style={{ flex: "1 1 200px" }}>
+                  <StatRow label="Actual points started" value={fmt(lineupIQ.totalActual)} accent={COLORS.turf} />
+                </div>
+                <div style={{ flex: "1 1 200px" }}>
+                  <StatRow label="Optimal lineup total" value={fmt(lineupIQ.totalOptimal)} accent={COLORS.goldDeep} />
+                </div>
+                <div style={{ flex: "1 1 200px" }}>
+                  <StatRow label="Points left on the bench" value={fmt(lineupIQ.totalLeft)} accent={COLORS.leatherDeep} />
+                </div>
+              </div>
+              <Card style={{ padding: 0, overflow: "hidden", marginBottom: 12 }}>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead>
+                      <tr style={{ background: COLORS.surfaceLight }}>
+                        {["Week", "Actual", "Optimal", "Left on bench"].map((h, i) => (
+                          <th
+                            key={h}
+                            style={{
+                              textAlign: i === 0 ? "left" : "right",
+                              padding: "7px 12px",
+                              fontFamily: "'IBM Plex Mono', monospace",
+                              fontSize: 11,
+                              letterSpacing: "0.06em",
+                              color: COLORS.muted,
+                              textTransform: "uppercase",
+                            }}
+                          >
+                            {h}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {lineupIQ.byWeek.map((w, i) => (
+                        <tr key={w.week} style={{ borderTop: i === 0 ? "none" : `1px solid ${COLORS.hairline}` }}>
+                          <td style={{ padding: "7px 12px", fontFamily: "'IBM Plex Mono', monospace", fontSize: 13 }}>
+                            {w.week}
+                          </td>
+                          <td style={{ padding: "7px 12px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: COLORS.turf }}>
+                            {fmt(w.actual)}
+                          </td>
+                          <td style={{ padding: "7px 12px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: COLORS.muted }}>
+                            {fmt(w.optimal)}
+                          </td>
+                          <td style={{ padding: "7px 12px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: w.left > 0.5 ? COLORS.leatherDeep : COLORS.muted, fontWeight: w.left > 0.5 ? 600 : 400 }}>
+                            {fmt(w.left)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+            </>
+          ) : (
+            <Card style={{ marginBottom: 12 }}>
+              <div style={{ color: COLORS.muted, fontSize: 13 }}>
+                No completed weeks yet this season. This fills in automatically once games start.
+              </div>
+            </Card>
+          )}
+
+          <SectionLabel>Team superlatives</SectionLabel>
+          <div style={{ fontSize: 11, color: COLORS.muted, marginBottom: 10 }}>
+            Every linked season for this manager, current one included. No hiding from this.
+          </div>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
+            <div style={{ flex: "1 1 320px", display: "flex", flexDirection: "column", gap: 10 }}>
+              <StatRow
+                label="Best single game (player)"
+                value={teamSuperlatives?.bestGame ? `${fmt(teamSuperlatives.bestGame.points)} pts, Wk ${teamSuperlatives.bestGame.week} ${teamSuperlatives.bestGame.season}` : "-"}
+                sub={teamSuperlatives?.bestGame ? playerLabel(teamSuperlatives.bestGame.playerId) : null}
+                accent={COLORS.gold}
+              />
+              <StatRow
+                label="Highest scoring week"
+                value={teamSuperlatives?.bestWeek ? `${fmt(teamSuperlatives.bestWeek.points)} pts, Wk ${teamSuperlatives.bestWeek.week} ${teamSuperlatives.bestWeek.season}` : "-"}
+                accent={COLORS.turf}
+              />
+            </div>
+            <div style={{ flex: "1 1 320px", display: "flex", flexDirection: "column", gap: 10 }}>
+              <StatRow
+                label="Highest scoring season"
+                value={teamSuperlatives?.bestSeasonPoints ? `${fmt(teamSuperlatives.bestSeasonPoints.fpts)} pts, ${teamSuperlatives.bestSeasonPoints.season}` : "-"}
+                accent={COLORS.leatherDeep}
+              />
+              <StatRow
+                label="Best regular season record"
+                value={teamSuperlatives?.bestSeasonRecord ? `${teamSuperlatives.bestSeasonRecord.wins}-${teamSuperlatives.bestSeasonRecord.losses}${teamSuperlatives.bestSeasonRecord.ties ? `-${teamSuperlatives.bestSeasonRecord.ties}` : ""}, ${teamSuperlatives.bestSeasonRecord.season}` : "-"}
+                accent={COLORS.goldDeep}
+              />
+            </div>
+          </div>
+
+          {topByPosition.length > 0 && (
+            <>
+              <SectionLabel>Position leaders (all time)</SectionLabel>
+              <div style={{ fontSize: 11, color: COLORS.muted, marginBottom: 10 }}>
+                Most points ever scored specifically while on this team, at each position. Includes players who
+                are long gone, whether they got traded away or unceremoniously cut.
+              </div>
+              <Card style={{ padding: 0, overflow: "hidden" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <tbody>
+                    {topByPosition.map((row, i) => {
+                      const pc = positionColor(row.pos);
+                      return (
+                        <tr key={row.pos} style={{ borderTop: i === 0 ? "none" : `1px solid ${COLORS.hairline}` }}>
+                          <td style={{ padding: "7px 12px", width: 60 }}>
+                            <span
+                              style={{
+                                fontFamily: "'IBM Plex Mono', monospace",
+                                fontSize: 10,
+                                fontWeight: 600,
+                                padding: "2px 6px",
+                                borderRadius: 4,
+                                background: pc.bg,
+                                color: pc.fg,
+                              }}
+                            >
+                              {row.pos}
+                            </span>
+                          </td>
+                          <td style={{ padding: "7px 12px", fontSize: 13 }}>
+                            {playerLabel(row.playerId)}
+                            {!row.stillOnRoster && (
+                              <span style={{ fontSize: 11, color: COLORS.muted, marginLeft: 6 }}>(no longer on roster)</span>
+                            )}
+                          </td>
+                          <td style={{ padding: "7px 12px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: COLORS.gold, fontWeight: 600 }}>
+                            {fmt(row.points)} pts
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </Card>
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function TrophyIcon({ size = 13 }) {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M8 21h8M12 17v4M7 4h10v4a5 5 0 0 1-10 0V4Z" />
+      <path d="M7 6H4a2 2 0 0 0 0 4h1M17 6h3a2 2 0 0 1 0 4h-1" />
+    </svg>
+  );
+}
+
+function DownArrowIcon({ size = 13 }) {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 5v13M6 13l6 6 6-6" />
+    </svg>
+  );
+}
+
+function UpArrowIcon({ size = 13 }) {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 19V6M6 11l6-6 6 6" />
+    </svg>
+  );
+}
+
+function StarIcon({ size = 13 }) {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="currentColor">
+      <path d="M12 2l3.09 6.26L22 9.27l-5 4.87L18.18 21 12 17.27 5.82 21 7 14.14l-5-4.87 6.91-1.01L12 2z" />
+    </svg>
+  );
+}
+
+function TrophyChip({ label, color, icon: Icon }) {
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
+        padding: "5px 12px",
+        borderRadius: 999,
+        background: color,
+        color: "#FFFFFF",
+        fontSize: 11,
+        fontWeight: 600,
+        fontFamily: "'IBM Plex Mono', monospace",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {Icon && <Icon />}
+      {label}
+    </span>
+  );
+}
+
+function StatRow({ label, value, sub, accent }) {
+  return (
+    <Card style={{ padding: "10px 14px", borderLeft: `3px solid ${accent}` }}>
+      <div style={{ fontSize: 11, color: COLORS.muted, textTransform: "uppercase", letterSpacing: "0.04em" }}>{label}</div>
+      {sub ? <div style={{ fontWeight: 600, fontSize: 13, marginTop: 2 }}>{sub}</div> : null}
+      <div style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 15, color: accent, marginTop: sub ? 2 : 4 }}>
+        {value}
+      </div>
+    </Card>
+  );
+}
+
+function PlayerRow({ info, first, muted }) {
+  const pc = positionColor(info.position);
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "7px 0",
+        borderTop: first ? "none" : `1px solid ${COLORS.hairline}`,
+      }}
+    >
+      {info.position && (
+        <span
+          style={{
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 10,
+            fontWeight: 600,
+            padding: "2px 6px",
+            borderRadius: 4,
+            background: pc.bg,
+            color: pc.fg,
+            flexShrink: 0,
+            minWidth: 26,
+            textAlign: "center",
+          }}
+        >
+          {info.position}
+        </span>
+      )}
+      <span style={{ color: muted ? COLORS.muted : COLORS.bone, fontSize: 13 }}>{info.name}</span>
+      {info.injuryStatus && (
+        <span
+          style={{
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 9,
+            fontWeight: 700,
+            padding: "1px 5px",
+            borderRadius: 4,
+            background: injuryColor(info.injuryStatus).bg,
+            color: injuryColor(info.injuryStatus).fg,
+            flexShrink: 0,
+          }}
+        >
+          {info.injuryStatus}
+        </span>
+      )}
+      {info.age && (
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: COLORS.muted }}>
+          {info.age}
+        </span>
+      )}
+      {info.team && (
+        <span style={{ fontSize: 11, color: COLORS.muted, marginLeft: "auto" }}>{info.team}</span>
+      )}
+    </div>
+  );
+}
+
+function TradesTab({ transactions, rostersById, usersById, players, seasonHistory, currentSeason, weekMatchups, seasonType }) {
+  const [page, setPage] = useState(0);
+  const [filterOwnerId, setFilterOwnerId] = useState("all");
+  const PAGE_SIZE = 8;
+
+  function playerLabel(pid) {
+    const p = players[pid];
+    if (!p) return pid;
+    return `${p.first_name || ""} ${p.last_name || ""}`.trim();
+  }
+
+  function formatDate(ms) {
+    if (!ms) return null;
+    return new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  }
+
+  // This season's per-owner player totals, computed the same way the
+  // historical season walk already does, so a trade's aging stat can keep
+  // accumulating into whatever season is currently live.
+  const currentOwnerBreakdown = useMemo(
+    () => computeOwnerBreakdownFromWeeks(weekMatchups, Object.values(rostersById)),
+    [weekMatchups, rostersById]
+  );
+
+  // Points a traded player has scored specifically while on the receiving
+  // team, starting the moment the trade happened and continuing through
+  // every season since, for as long as they've actually stayed on that
+  // roster. The moment they leave (traded again or dropped), a season's
+  // per-owner total for them stops accruing on its own, since it's built
+  // from real matchup ownership, not an assumption they stayed put.
+  function computePointsSinceTrade(t, pid, ownerId) {
+    const tradeSeasonNum = Number(t.season);
+    let total = 0;
+
+    const tradeSeasonMatchups = weekMatchupsBySeason[t.season];
+    if (tradeSeasonMatchups) {
+      total += computePointsSinceWeek(pid, t.leg || 1, tradeSeasonMatchups);
+    }
+
+    (seasonHistory || []).forEach((s) => {
+      if (Number(s.season) > tradeSeasonNum) {
+        total += s.ownerPlayerTotals?.[ownerId]?.[pid] || 0;
+      }
+    });
+
+    if (Number(currentSeason) > tradeSeasonNum) {
+      total += currentOwnerBreakdown.playerTotals?.[ownerId]?.[pid] || 0;
+    }
+
+    return total;
+  }
+
+  // Sub-classify a round-0 (before Week 1) trade as preseason (roughly
+  // August) versus deep offseason (everything else), just for a nicer
+  // label. The round-0 vs real-week distinction itself is reliable; this
+  // is only cosmetic on top of that.
+  // Determine a trade's real phase from its actual date compared to its own
+  // season's calendar year, rather than trusting any Sleeper field for this.
+  // A trade under season "2026" dated Jan or Apr 2026 is mathematically
+  // before that season's September kickoff, full stop, regardless of what
+  // leg/round Sleeper attached to it.
+  function tradePhaseLabel(t) {
+    const seasonYear = Number(t.season);
+    if (t.created && !isNaN(seasonYear)) {
+      const d = new Date(t.created);
+      const year = d.getFullYear();
+      const month = d.getMonth(); // 0 = Jan
+      if (year === seasonYear && month <= 7) {
+        return month === 7 ? "PRESEASON" : "OFFSEASON";
+      }
+    }
+    const wk = t._round || t.leg;
+    return wk ? `WEEK ${wk}` : "WEEK ?";
+  }
+
+  // Every season's own weekly matchup data, keyed by season, so the aging
+  // stat can find the right source regardless of which season a trade
+  // happened in.
+  const weekMatchupsBySeason = useMemo(() => {
+    const map = { [currentSeason]: weekMatchups };
+    (seasonHistory || []).forEach((s) => {
+      map[s.season] = s.weekMatchups || {};
+    });
+    return map;
+  }, [currentSeason, weekMatchups, seasonHistory]);
+
+  // Merge this season's trades (resolved against live current-season rosters)
+  // with every historical season's trades (already resolved against that
+  // season's own rosters, to avoid attributing an old trade to the wrong
+  // manager via reused roster ID numbers).
+  const allTrades = useMemo(() => {
+    const current = (transactions || [])
+      .filter((t) => t.type === "trade" && t.status === "complete")
+      .map((t) => {
+        const ownersByRosterId = {};
+        (t.roster_ids || []).forEach((rid) => {
+          ownersByRosterId[rid] = usersById[rostersById[rid]?.owner_id];
+        });
+        return { ...t, season: currentSeason, ownersByRosterId };
+      });
+    const historical = (seasonHistory || []).flatMap((s) => s.trades || []);
+    return [...current, ...historical].sort((a, b) => (b.created || 0) - (a.created || 0));
+  }, [transactions, rostersById, usersById, currentSeason, seasonHistory]);
+
+  const filteredTrades = useMemo(() => {
+    if (filterOwnerId === "all") return allTrades;
+    return allTrades.filter((t) =>
+      (t.roster_ids || []).some((rid) => t.ownersByRosterId?.[rid]?.user_id === filterOwnerId)
+    );
+  }, [allTrades, filterOwnerId]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredTrades.length / PAGE_SIZE));
+  const pageTrades = filteredTrades.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE);
+
+  // Trade count per manager, across every linked season. Since allTrades is
+  // sorted newest-first, the first time we see an owner locks in their most
+  // current team name/avatar rather than an old one.
+  const tradeCounts = useMemo(() => {
+    const counts = {};
+    allTrades.forEach((t) => {
+      (t.roster_ids || []).forEach((rid) => {
+        const owner = t.ownersByRosterId?.[rid];
+        if (!owner) return;
+        const oid = owner.user_id;
+        if (!counts[oid]) counts[oid] = { count: 0, user: owner };
+        counts[oid].count++;
+      });
+    });
+    return Object.values(counts).sort((a, b) => b.count - a.count);
+  }, [allTrades]);
+
+  useEffect(() => {
+    setPage(0);
+  }, [filterOwnerId]);
+
+  if (allTrades.length === 0) {
+    return (
+      <div>
+        <SectionLabel>Trade History</SectionLabel>
+        <Card>
+          <div style={{ color: COLORS.muted, borderLeft: `3px solid ${COLORS.leather}`, paddingLeft: 10 }}>No completed trades yet.</div>
+        </Card>
+      </div>
+    );
+  }
+
+  const isActiveSeason = seasonType === "regular" || seasonType === "post";
+
+  return (
+    <div>
+      <SectionLabel>Trade History</SectionLabel>
+      <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
+        Every deal, for better or worse, across every linked season. Someone's going to bring this up drunk at a
+        tailgate in three years. Every trade shows points scored since the deal happened, and it keeps running for
+        as long as that player actually stays on the team that acquired them, even across a season boundary. The
+        moment they get traded again or dropped, it stops right there.
+      </div>
+      {!isActiveSeason && (
+        <div style={{ fontSize: 12, color: COLORS.gold, marginBottom: 10 }}>
+          {seasonType === "pre"
+            ? "Still preseason, so any trades made now are early moves before games actually count."
+            : "It's the offseason, so trade activity will pick back up once the new league year gets set up."}
+        </div>
+      )}
+
+      {tradeCounts.length > 0 && (
+        <div style={{ marginBottom: 16 }}>
+          <SectionLabel>Most active traders</SectionLabel>
+          <BalancedGrid
+            gap={10}
+            minWidth={220}
+            items={tradeCounts.map((tc) => ({
+              key: tc.user.user_id,
+              node: (
+                <Card style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", borderLeft: `3px solid ${teamColor(teamName(tc.user))}` }}>
+                  <Crest name={teamName(tc.user)} logo={avatarUrl(tc.user)} size={26} />
+                  <span style={{ fontWeight: 600, fontSize: 13, flex: 1 }}>{withOwner(tc.user)}</span>
+                  <span style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 15, color: COLORS.gold }}>
+                    {tc.count}
+                  </span>
+                </Card>
+              ),
+            }))}
+          />
+        </div>
+      )}
+
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+        <SectionLabel>Filter</SectionLabel>
+        <select
+          value={filterOwnerId}
+          onChange={(e) => setFilterOwnerId(e.target.value)}
+          style={{
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 12,
+            padding: "7px 12px",
+            borderRadius: 6,
+            border: `1px solid ${COLORS.hairline}`,
+            background: COLORS.surface,
+            color: COLORS.turf,
+            cursor: "pointer",
+          }}
+        >
+          <option value="all">All managers</option>
+          {tradeCounts.map((tc) => (
+            <option key={tc.user.user_id} value={tc.user.user_id}>
+              {withOwner(tc.user)}
+            </option>
+          ))}
+        </select>
+        {filterOwnerId !== "all" && (
+          <span style={{ fontSize: 12, color: COLORS.muted }}>
+            Showing {filteredTrades.length} trade{filteredTrades.length === 1 ? "" : "s"}
+          </span>
+        )}
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 14 }}>
+        {pageTrades.map((t) => {
+          const date = formatDate(t.created);
+          return (
+            <Card key={`${t.season}-${t.transaction_id}`}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 10, flexWrap: "wrap", gap: 6 }}>
+                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: COLORS.turfLight }}>
+                  {tradePhaseLabel(t)} TRADE · {t.season}
+                </div>
+                {date && (
+                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: COLORS.muted }}>
+                    {date}
+                  </div>
+                )}
+              </div>
+              <BalancedGrid
+                gap={10}
+                minWidth={200}
+                items={(t.roster_ids || []).map((rid) => {
+                  const owner = t.ownersByRosterId?.[rid];
+                  const adds = Object.entries(t.adds || {})
+                    .filter(([, r]) => r === rid)
+                    .map(([pid]) => pid);
+                  const draftAdds = (t.draft_picks || []).filter((dp) => dp.owner_id === rid);
+                  return {
+                    key: rid,
+                    node: (
+                      <div style={{ borderLeft: `3px solid ${teamColor(teamName(owner))}`, paddingLeft: 10 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                          <Crest name={teamName(owner)} logo={avatarUrl(owner)} size={24} />
+                          <span style={{ fontWeight: 600, fontSize: 13 }}>{withOwner(owner)}</span>
+                        </div>
+                        <div style={{ fontSize: 13, color: COLORS.muted }}>
+                          {adds.map((pid) => {
+                            const isCurrentSeasonTrade = t.season === currentSeason;
+                            const suppress = isCurrentSeasonTrade && !isActiveSeason;
+                            const sincePts = !suppress && owner
+                              ? computePointsSinceTrade(t, pid, owner.user_id)
+                              : null;
+                            return (
+                              <div key={pid} style={{ marginBottom: 2 }}>
+                                <div>+ {playerLabel(pid)}</div>
+                                {sincePts !== null && (
+                                  <div style={{ fontSize: 11, color: COLORS.gold, marginLeft: 12 }}>
+                                    {fmt(sincePts)} pts since the trade
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                          {draftAdds.map((dp, i) => (
+                            <div key={i}>+ {dp.season} Rd {dp.round} Pick</div>
+                          ))}
+                          {adds.length === 0 && draftAdds.length === 0 && <div>-</div>}
+                        </div>
+                      </div>
+                    ),
+                  };
+                })}
+              />
+            </Card>
+          );
+        })}
+      </div>
+
+      {totalPages > 1 && (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12 }}>
+          <button
+            onClick={() => setPage((p) => Math.max(0, p - 1))}
+            disabled={page === 0}
+            style={{
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 12,
+              padding: "7px 14px",
+              borderRadius: 6,
+              border: `1px solid ${COLORS.hairline}`,
+              background: "transparent",
+              color: page === 0 ? COLORS.hairline : COLORS.turf,
+              cursor: page === 0 ? "default" : "pointer",
+            }}
+          >
+            Previous
+          </button>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: COLORS.muted }}>
+            Page {page + 1} of {totalPages}
+          </span>
+          <button
+            onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+            disabled={page >= totalPages - 1}
+            style={{
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 12,
+              padding: "7px 14px",
+              borderRadius: 6,
+              border: `1px solid ${COLORS.hairline}`,
+              background: "transparent",
+              color: page >= totalPages - 1 ? COLORS.hairline : COLORS.turf,
+              cursor: page >= totalPages - 1 ? "default" : "pointer",
+            }}
+          >
+            Next
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DraftPicksTab({ rosters, usersById, tradedPicks, draftRounds, currentSeason, currentDraftPicks, seasonHistory, players }) {
+  const [mode, setMode] = useState("byTeam");
+  const [historySeasonIdx, setHistorySeasonIdx] = useState(0);
+
+  const picks = useMemo(
+    () => computeDraftPicks(rosters, tradedPicks, draftRounds, currentSeason),
+    [rosters, tradedPicks, draftRounds, currentSeason]
+  );
+
+  const ownerOf = (rid) => usersById[rosters.find((r) => r.roster_id === rid)?.owner_id];
+
+  function playerLabel(pid) {
+    const p = players?.[pid];
+    if (!p) return pid;
+    const name = `${p.first_name || ""} ${p.last_name || ""}`.trim() || pid;
+    return p.position ? `${name} (${p.position}${p.team ? ` - ${p.team}` : ""})` : name;
+  }
+
+  // Past drafts, newest season first. Current season's draft (if it's
+  // happened yet) plus every linked historical season.
+  const pastDrafts = useMemo(() => {
+    const entries = [];
+    if (currentDraftPicks && currentDraftPicks.length > 0) {
+      entries.push({ season: currentSeason, picks: currentDraftPicks });
+    }
+    (seasonHistory || []).forEach((s) => {
+      if (s.draftPicks && s.draftPicks.length > 0) {
+        entries.push({ season: s.season, picks: s.draftPicks });
+      }
+    });
+    return entries.sort((a, b) => Number(b.season) - Number(a.season));
+  }, [currentDraftPicks, currentSeason, seasonHistory]);
+
+  const byTeam = useMemo(() => {
+    const groups = {};
+    rosters.forEach((r) => { groups[r.roster_id] = []; });
+    picks.forEach((p) => {
+      if (!groups[p.currentRosterId]) groups[p.currentRosterId] = [];
+      groups[p.currentRosterId].push(p);
+    });
+    return rosters.map((r) => ({
+      rosterId: r.roster_id,
+      owner: usersById[r.owner_id],
+      picks: (groups[r.roster_id] || []).sort((a, b) => a.season.localeCompare(b.season) || a.round - b.round),
+    }));
+  }, [rosters, picks, usersById]);
+
+  const boardColumns = [
+    { key: "season", label: "Season", align: "left", accessor: (p) => p.season },
+    { key: "round", label: "Round", accessor: (p) => p.round },
+    {
+      key: "original",
+      label: "Original team",
+      align: "left",
+      accessor: (p) => withOwner(ownerOf(p.originalRosterId)),
+      render: (p) => (
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <Crest name={teamName(ownerOf(p.originalRosterId))} logo={avatarUrl(ownerOf(p.originalRosterId))} size={22} />
+          <span style={{ fontSize: 13 }}>{withOwner(ownerOf(p.originalRosterId))}</span>
+        </div>
+      ),
+    },
+    {
+      key: "current",
+      label: "Current owner",
+      align: "left",
+      accessor: (p) => withOwner(ownerOf(p.currentRosterId)),
+      render: (p) => (
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <Crest name={teamName(ownerOf(p.currentRosterId))} logo={avatarUrl(ownerOf(p.currentRosterId))} size={22} />
+          <span style={{ fontSize: 13, fontWeight: p.traded ? 600 : 400, color: p.traded ? COLORS.gold : COLORS.bone }}>
+            {withOwner(ownerOf(p.currentRosterId))}
+          </span>
+        </div>
+      ),
+    },
+  ];
+
+  return (
+    <div>
+      <SectionLabel>Draft picks</SectionLabel>
+      <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
+        Every team's draft capital for the next two classes. This is the future you're trading away, so look before
+        you deal it. Picks not shown here simply haven't been traded, meaning they're still with whoever originally
+        owned them.
+      </div>
+
+      <div style={{ display: "flex", gap: 4, marginBottom: 12 }}>
+        {[["byTeam", "By team"], ["board", "Full board"], ["history", "History"]].map(([id, label]) => (
+          <button
+            key={id}
+            onClick={() => setMode(id)}
+            style={{
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 12,
+              padding: "7px 14px",
+              borderRadius: 6,
+              border: `1px solid ${mode === id ? COLORS.turf : COLORS.hairline}`,
+              background: mode === id ? COLORS.turfTint : "transparent",
+              color: mode === id ? COLORS.turf : COLORS.muted,
+              cursor: "pointer",
+              fontWeight: mode === id ? 600 : 400,
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {mode === "byTeam" ? (
+        <BalancedGrid
+          minWidth={280}
+          items={byTeam.map((t) => ({
+            key: t.rosterId,
+            node: (
+              <Card style={{ borderLeft: `3px solid ${teamColor(teamName(t.owner))}` }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                  <Crest name={teamName(t.owner)} logo={avatarUrl(t.owner)} size={28} />
+                  <span style={{ fontWeight: 600, fontSize: 14 }}>{withOwner(t.owner)}</span>
+                  <span style={{ marginLeft: "auto", fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: COLORS.muted }}>
+                    {t.picks.length} picks
+                  </span>
+                </div>
+                {t.picks.length === 0 ? (
+                  <div style={{ color: COLORS.muted, fontSize: 13, borderLeft: `3px solid ${COLORS.leather}`, paddingLeft: 10 }}>No picks on record.</div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column" }}>
+                    {t.picks.map((p, i) => {
+                      const isOwn = p.originalRosterId === p.currentRosterId;
+                      return (
+                        <div
+                          key={`${p.season}-${p.round}-${p.originalRosterId}`}
+                          style={{ display: "flex", alignItems: "center", padding: "6px 0", borderTop: i === 0 ? "none" : `1px solid ${COLORS.hairline}` }}
+                        >
+                          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, fontWeight: 600, width: 100 }}>
+                            {p.season} R{p.round}
+                          </span>
+                          {!isOwn && (
+                            <span style={{ fontSize: 11, color: COLORS.gold }}>
+                              via {withOwner(ownerOf(p.originalRosterId))}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </Card>
+            ),
+          }))}
+        />
+      ) : mode === "board" ? (
+        <Card style={{ padding: 0, overflow: "hidden" }}>
+          <div style={{ overflowX: "auto" }}>
+            <SortableTable columns={boardColumns} rows={picks} rowKey={(p) => `${p.season}-${p.round}-${p.originalRosterId}`} defaultSortKey="season" defaultSortDir="asc" />
+          </div>
+        </Card>
+      ) : (
+        <div>
+          {pastDrafts.length === 0 ? (
+            <Card>
+              <div style={{ color: COLORS.muted, borderLeft: `3px solid ${COLORS.leather}`, paddingLeft: 10 }}>No completed drafts on record yet.</div>
+            </Card>
+          ) : (
+            <>
+              <div style={{ display: "flex", gap: 4, marginBottom: 12, flexWrap: "wrap" }}>
+                {pastDrafts.map((d, i) => (
+                  <button
+                    key={d.season}
+                    onClick={() => setHistorySeasonIdx(i)}
+                    style={{
+                      fontFamily: "'IBM Plex Mono', monospace",
+                      fontSize: 12,
+                      padding: "6px 12px",
+                      borderRadius: 6,
+                      border: `1px solid ${historySeasonIdx === i ? COLORS.gold : COLORS.hairline}`,
+                      background: historySeasonIdx === i ? COLORS.surfaceLight : "transparent",
+                      color: historySeasonIdx === i ? COLORS.gold : COLORS.muted,
+                      cursor: "pointer",
+                    }}
+                  >
+                    {d.season}
+                  </button>
+                ))}
+              </div>
+              <Card style={{ padding: 0, overflow: "hidden" }}>
+                <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr style={{ background: COLORS.surfaceLight }}>
+                      {["Pick", "Round", "Player", "Drafted by"].map((h, i) => (
+                        <th
+                          key={h}
+                          style={{
+                            textAlign: i >= 2 ? "left" : "right",
+                            padding: "7px 12px",
+                            fontFamily: "'IBM Plex Mono', monospace",
+                            fontSize: 11,
+                            letterSpacing: "0.06em",
+                            color: COLORS.muted,
+                            textTransform: "uppercase",
+                          }}
+                        >
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(pastDrafts[historySeasonIdx]?.picks || []).map((p, i) => (
+                      <tr key={`${p.round}-${p.pickNo}`} style={{ borderTop: i === 0 ? "none" : `1px solid ${COLORS.hairline}` }}>
+                        <td style={{ padding: "7px 12px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: COLORS.muted }}>
+                          {p.pickNo}
+                        </td>
+                        <td style={{ padding: "7px 12px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: COLORS.muted }}>
+                          {p.round}
+                        </td>
+                        <td style={{ padding: "7px 12px", fontSize: 13 }}>{playerLabel(p.playerId)}</td>
+                        <td style={{ padding: "7px 12px" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <Crest name={teamName(p.owner)} logo={avatarUrl(p.owner)} size={22} />
+                            <span style={{ fontSize: 13, fontWeight: 600 }}>{withOwner(p.owner)}</span>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                </div>
+              </Card>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Builds a plain-text auto-draft recap for one week, in the site's voice,
+// from real matchup results. Meant to be a starting point the manager edits,
+// not a finished article.
+function buildSeasonHistoryData(summary, players) {
+  function playerLabelFor(pid) {
+    const p = players?.[pid];
+    if (!p) return pid;
+    const name = `${p.first_name || ""} ${p.last_name || ""}`.trim() || pid;
+    return p.position ? `${name} (${p.position})` : name;
+  }
+
+  const leagueSummaryRows = [];
+
+  // Champion and every season-level superlative stay blank for a season
+  // still in progress, since none of them are actually decided yet.
+  if (summary.isComplete) {
+    if (summary.champion) {
+      leagueSummaryRows.push(["Champion", withOwner(summary.champion)]);
+      if (summary.runnerUp) leagueSummaryRows.push(["Runner-up", withOwner(summary.runnerUp)]);
+      if (summary.third) leagueSummaryRows.push(["Third", withOwner(summary.third)]);
+    }
+
+    if (summary.standings.length > 0) {
+      const topScorer = [...summary.standings].sort((a, b) => b.fpts - a.fpts)[0];
+      leagueSummaryRows.push(["Points leader", `${topScorer.displayName}, ${fmt(topScorer.fpts)} PF`]);
+    }
+
+    if (summary.highGame) {
+      leagueSummaryRows.push(["Best single week", `${withOwner(summary.highGame.owner)}, ${fmt(summary.highGame.points)} pts (Wk ${summary.highGame.week})`]);
+    }
+
+    if (summary.bestPlayerGame) {
+      let val = `${playerLabelFor(summary.bestPlayerGame.playerId)}, ${fmt(summary.bestPlayerGame.points)} pts (Wk ${summary.bestPlayerGame.week}`;
+      if (summary.bestPlayerGame.owner) val += `, ${withOwner(summary.bestPlayerGame.owner)}`;
+      val += ")";
+      leagueSummaryRows.push(["Best individual performance", val]);
+    }
+
+    if (summary.lastPlace) {
+      leagueSummaryRows.push(["Wall of shame", withOwner(summary.lastPlace)]);
+    }
+  }
+
+  const teamRows = summary.standings.map((s, i) => ({
+    rank: i + 1,
+    ownerId: s.ownerId,
+    displayName: s.displayName,
+    name: s.name,
+    avatar: s.avatar,
+    wins: s.wins,
+    losses: s.losses,
+    ties: s.ties,
+    fpts: s.fpts,
+    fptsAgainst: s.fptsAgainst,
+    diff: s.fpts - s.fptsAgainst,
+  }));
+
+  return { leagueSummaryRows, teamRows };
+}
+
+function HistoryTab({ rostersById, usersById, standings, seasonHistory, superlatives, players, currentSeason }) {
+  // One summary per season, current one included.
+  const seasonSummaries = useMemo(() => {
+    const historical = (seasonHistory || []).map((s) => ({
+      season: s.season,
+      isComplete: true,
+      champion: s.champion,
+      runnerUp: s.runnerUp,
+      third: s.third,
+      lastPlace: s.lastPlace,
+      standings: s.standings || [],
+      highGame: s.highGame,
+      bestPlayerGame: s.bestPlayerGame,
+    }));
+    const currentTopWeek = superlatives?.currentSeasonSuper?.topWeek;
+    const currentHighGame = currentTopWeek
+      ? { owner: usersById[rostersById[currentTopWeek.rosterId]?.owner_id], points: currentTopWeek.points, week: currentTopWeek.week }
+      : null;
+    const current = {
+      season: currentSeason,
+      isComplete: false,
+      champion: null,
+      runnerUp: null,
+      third: null,
+      lastPlace: null,
+      standings: standings || [],
+      highGame: currentHighGame,
+      bestPlayerGame: superlatives?.currentSeasonSuper?.bestPlayerGame || null,
+    };
+    return [current, ...historical].sort((a, b) => Number(b.season) - Number(a.season));
+  }, [seasonHistory, currentSeason, standings, superlatives, rostersById, usersById]);
+
+  const [selectedSeasonIdx, setSelectedSeasonIdx] = useState(0);
+  const selectedSummary = seasonSummaries[selectedSeasonIdx];
+  const historyData = selectedSummary ? buildSeasonHistoryData(selectedSummary, players) : null;
+
+  if (seasonSummaries.every((s) => s.standings.length === 0)) {
+    return (
+      <div>
+        <SectionLabel>History</SectionLabel>
+        <Card>
+          <div style={{ color: COLORS.muted, borderLeft: `3px solid ${COLORS.leather}`, paddingLeft: 10 }}>No completed weeks yet this season. Check back after Week 1.</div>
+        </Card>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <SectionLabel>History</SectionLabel>
+      <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
+        Season by season, receipts don't expire. Champions, superlatives, and every team's full stat line, forever.
+      </div>
+
+      <div style={{ display: "flex", gap: 4, marginBottom: 12, flexWrap: "wrap" }}>
+        {seasonSummaries.map((s, i) => (
+          <button
+            key={s.season}
+            onClick={() => setSelectedSeasonIdx(i)}
+            style={{
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 12,
+              padding: "6px 12px",
+              borderRadius: 6,
+              border: `1px solid ${selectedSeasonIdx === i ? COLORS.gold : COLORS.hairline}`,
+              background: selectedSeasonIdx === i ? COLORS.surfaceLight : "transparent",
+              color: selectedSeasonIdx === i ? COLORS.gold : COLORS.muted,
+              cursor: "pointer",
+            }}
+          >
+            {s.season}{!s.isComplete ? " (in progress)" : ""}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 16, color: COLORS.turf, marginBottom: 10 }}>
+        Season {selectedSummary?.season}
+      </div>
+
+      {historyData && (
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ flex: "1 1 280px" }}>
+            {historyData.leagueSummaryRows.length > 0 ? (
+              <InfoTable title="League summary" rows={historyData.leagueSummaryRows} accent={COLORS.goldDeep} />
+            ) : (
+              <div>
+                <SectionLabel>League summary</SectionLabel>
+                <Card>
+                  <div style={{ color: COLORS.muted, fontSize: 13 }}>
+                    Champion and season superlatives show up here once the season wraps up.
+                  </div>
+                </Card>
+              </div>
+            )}
+          </div>
+          <div style={{ flex: "2 1 420px" }}>
+            <SectionLabel>Team synopsis</SectionLabel>
+            <Card style={{ padding: 0, overflow: "hidden" }}>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr style={{ background: COLORS.surfaceLight }}>
+                      {["#", "Team", "W", "L", "T", "PF", "PA", "Diff"].map((h, i) => (
+                        <th
+                          key={h}
+                          style={{
+                            textAlign: i <= 1 ? "left" : "right",
+                            padding: "7px 12px",
+                            fontFamily: "'IBM Plex Mono', monospace",
+                            fontSize: 11,
+                            letterSpacing: "0.06em",
+                            color: COLORS.muted,
+                            textTransform: "uppercase",
+                          }}
+                        >
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {historyData.teamRows.map((t, i) => (
+                      <tr key={t.ownerId || i} style={{ borderTop: i === 0 ? "none" : `1px solid ${COLORS.hairline}` }}>
+                        <td style={{ padding: "7px 12px", fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: COLORS.muted }}>
+                          {t.rank}
+                        </td>
+                        <td style={{ padding: "7px 12px" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <Crest name={t.name} logo={t.avatar} size={22} />
+                            <span style={{ fontSize: 13, fontWeight: 600 }}>{t.displayName}</span>
+                          </div>
+                        </td>
+                        <td style={{ padding: "7px 12px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace", fontSize: 13 }}>{t.wins}</td>
+                        <td style={{ padding: "7px 12px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace", fontSize: 13 }}>{t.losses}</td>
+                        <td style={{ padding: "7px 12px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace", fontSize: 13 }}>{t.ties}</td>
+                        <td style={{ padding: "7px 12px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: COLORS.gold }}>{fmt(t.fpts)}</td>
+                        <td style={{ padding: "7px 12px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: COLORS.muted }}>{fmt(t.fptsAgainst)}</td>
+                        <td style={{ padding: "7px 12px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: t.diff >= 0 ? COLORS.turf : COLORS.leatherDeep, fontWeight: 600 }}>
+                          {t.diff >= 0 ? "+" : ""}{fmt(t.diff)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Shared across Home and Rosters: every all-time aggregation (champions,
+// wall of shame, and the 8 league-wide superlative titles) computed once
+// from a single source of truth, so both pages always agree on who holds what.
+function useLeagueSuperlatives(data, standings, usersById) {
+  const { league, seasonHistory, weekMatchups, rosters, users } = data;
+
+  const championsByOwner = useMemo(() => {
+    const map = {};
+    seasonHistory.forEach((s) => {
+      if (!s.champion) return;
+      const key = s.champion.user_id;
+      if (!map[key]) map[key] = { user: s.champion, years: [] };
+      map[key].years.push(s.season);
+    });
+    return Object.values(map).sort((a, b) => b.years.length - a.years.length);
+  }, [seasonHistory]);
+
+  const orderedTitles = useMemo(() => {
+    return [...seasonHistory].filter((s) => s.champion).sort((a, b) => Number(a.season) - Number(b.season));
+  }, [seasonHistory]);
+
+  const currentSeasonSuper = useMemo(() => {
+    let topWeek = null;
+    let blowout = null;
+    let bestPlayerGame = null;
+    Object.entries(weekMatchups || {}).forEach(([week, matchups]) => {
+      const byMatchupId = {};
+      matchups.forEach((m) => {
+        if (!byMatchupId[m.matchup_id]) byMatchupId[m.matchup_id] = [];
+        byMatchupId[m.matchup_id].push(m);
+      });
+      Object.values(byMatchupId).forEach((pair) => {
+        pair.forEach((m) => {
+          if (!topWeek || (m.points ?? 0) > topWeek.points) {
+            topWeek = { points: m.points ?? 0, rosterId: m.roster_id, week };
+          }
+          Object.entries(m.players_points || {}).forEach(([pid, pts]) => {
+            if (!bestPlayerGame || pts > bestPlayerGame.points) {
+              const owner = usersById[rosters.find((r) => r.roster_id === m.roster_id)?.owner_id];
+              bestPlayerGame = { playerId: pid, points: pts, week, owner };
+            }
+          });
+        });
+        if (pair.length === 2) {
+          const margin = Math.abs((pair[0].points ?? 0) - (pair[1].points ?? 0));
+          const winner = pair[0].points >= pair[1].points ? pair[0] : pair[1];
+          if (!blowout || margin > blowout.margin) {
+            blowout = { margin, rosterId: winner.roster_id, week };
+          }
+        }
+      });
+    });
+    return { topWeek, blowout, bestPlayerGame };
+  }, [weekMatchups, rosters, usersById]);
+
+  const ownerForRoster = (rid) => {
+    const r = rosters.find((r) => r.roster_id === rid);
+    return r ? usersById[r.owner_id] : null;
+  };
+
+  const wallOfShame = useMemo(() => {
+    return [...seasonHistory].filter((s) => s.lastPlace).sort((a, b) => Number(b.season) - Number(a.season));
+  }, [seasonHistory]);
+
+  const historyRows = useMemo(() => {
+    return [...seasonHistory].sort((a, b) => Number(b.season) - Number(a.season));
+  }, [seasonHistory]);
+
+  const ownerDirectory = useMemo(() => {
+    const map = {};
+    [...seasonHistory].sort((a, b) => Number(a.season) - Number(b.season)).forEach((s) => {
+      (s.users || []).forEach((u) => { map[u.user_id] = u; });
+    });
+    users.forEach((u) => { map[u.user_id] = u; });
+    return map;
+  }, [seasonHistory, users]);
+
+  const allSeasonEntries = useMemo(() => {
+    const hist = seasonHistory.map((s) => ({
+      season: s.season,
+      standings: s.standings || [],
+      playoffWins: s.playoffWins || {},
+      highGame: s.highGame || null,
+      bestPlayerGame: s.bestPlayerGame || null,
+    }));
+    let currentHighGame = null;
+    if (currentSeasonSuper.topWeek) {
+      const r = rosters.find((r) => r.roster_id === currentSeasonSuper.topWeek.rosterId);
+      const owner = r ? usersById[r.owner_id] : null;
+      if (owner) currentHighGame = { owner, points: currentSeasonSuper.topWeek.points, week: currentSeasonSuper.topWeek.week };
+    }
+    const current = {
+      season: league?.season,
+      standings: standings || [],
+      playoffWins: {},
+      highGame: currentHighGame,
+      bestPlayerGame: currentSeasonSuper.bestPlayerGame || null,
+    };
+    return [...hist, current];
+  }, [seasonHistory, standings, currentSeasonSuper, rosters, usersById, league]);
+
+  const allTimeSuperlatives = useMemo(() => {
+    const career = {};
+    const playoffTotals = {};
+    let bestSeason = null;
+    let highestScoringSeason = null;
+    let singleGame = null;
+    let bestPlayerRecord = null;
+
+    allSeasonEntries.forEach((entry) => {
+      (entry.standings || []).forEach((s) => {
+        if (!s.ownerId) return;
+        if (!career[s.ownerId]) career[s.ownerId] = { wins: 0, losses: 0, ties: 0, fpts: 0, games: 0 };
+        career[s.ownerId].wins += s.wins;
+        career[s.ownerId].losses += s.losses;
+        career[s.ownerId].ties += s.ties;
+        career[s.ownerId].fpts += s.fpts;
+        career[s.ownerId].games += s.wins + s.losses + s.ties;
+
+        const games = s.wins + s.losses + s.ties;
+        if (games > 0) {
+          const pct = (s.wins + s.ties * 0.5) / games;
+          if (!bestSeason || pct > bestSeason.pct || (pct === bestSeason.pct && s.fpts > bestSeason.fpts)) {
+            bestSeason = { ownerId: s.ownerId, wins: s.wins, losses: s.losses, ties: s.ties, season: entry.season, pct, fpts: s.fpts };
+          }
+        }
+        if (!highestScoringSeason || s.fpts > highestScoringSeason.fpts) {
+          highestScoringSeason = { ownerId: s.ownerId, fpts: s.fpts, season: entry.season };
+        }
+      });
+
+      Object.entries(entry.playoffWins || {}).forEach(([ownerId, wins]) => {
+        playoffTotals[ownerId] = (playoffTotals[ownerId] || 0) + wins;
+      });
+
+      if (entry.highGame && (!singleGame || entry.highGame.points > singleGame.points)) {
+        singleGame = { owner: entry.highGame.owner, points: entry.highGame.points, week: entry.highGame.week, season: entry.season };
+      }
+
+      if (entry.bestPlayerGame && (!bestPlayerRecord || entry.bestPlayerGame.points > bestPlayerRecord.points)) {
+        bestPlayerRecord = { ...entry.bestPlayerGame, season: entry.season };
+      }
+    });
+
+    let bestWinPct = null;
+    let bestPPG = null;
+    Object.entries(career).forEach(([ownerId, c]) => {
+      if (c.games === 0) return;
+      const pct = (c.wins + c.ties * 0.5) / c.games;
+      if (!bestWinPct || pct > bestWinPct.pct) bestWinPct = { ownerId, pct, wins: c.wins, losses: c.losses };
+      const ppg = c.fpts / c.games;
+      if (!bestPPG || ppg > bestPPG.ppg) bestPPG = { ownerId, ppg };
+    });
+
+    let mostPlayoffWins = null;
+    Object.entries(playoffTotals).forEach(([ownerId, wins]) => {
+      if (!mostPlayoffWins || wins > mostPlayoffWins.wins) mostPlayoffWins = { ownerId, wins };
+    });
+
+    return { bestWinPct, bestPPG, mostPlayoffWins, bestSeason, highestScoringSeason, singleGame, bestPlayerRecord };
+  }, [allSeasonEntries]);
+
+  const mostTitles = championsByOwner[0];
+
+  return {
+    championsByOwner, orderedTitles, currentSeasonSuper, ownerForRoster, wallOfShame,
+    historyRows, ownerDirectory, allSeasonEntries, allTimeSuperlatives, mostTitles,
+  };
+}
+
+function ordinal(n) {
+  const s = ["th", "st", "nd", "rd"];
+  const v = n % 100;
+  return `${n}${s[(v - 20) % 10] || s[v] || s[0]}`;
+}
+
+function PodiumRow({ season, champion, runnerUp, third }) {
+  const steps = [
+    { place: 2, user: runnerUp, height: 40, color: COLORS.turfLight },
+    { place: 1, user: champion, height: 60, color: COLORS.gold },
+    { place: 3, user: third, height: 28, color: COLORS.leather },
+  ];
+  return (
+    <Card style={{ padding: "10px 12px 0" }}>
+      <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: COLORS.muted, marginBottom: 8 }}>
+        {season}
+      </div>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 6, justifyContent: "center" }}>
+        {steps.map((st) => (
+          <div key={st.place} style={{ display: "flex", flexDirection: "column", alignItems: "center", flex: 1, minWidth: 0 }}>
+            {st.user ? <Crest name={teamName(st.user)} logo={avatarUrl(st.user)} size={26} /> : <div style={{ width: 26, height: 26 }} />}
+            <div
+              style={{
+                fontSize: 11,
+                textAlign: "center",
+                marginTop: 4,
+                marginBottom: 6,
+                color: st.place === 1 ? COLORS.turf : COLORS.muted,
+                fontWeight: st.place === 1 ? 600 : 400,
+                maxWidth: 90,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {st.user ? withOwner(st.user) : "-"}
+            </div>
+            <div
+              style={{
+                width: "100%",
+                height: st.height,
+                background: st.color,
+                borderRadius: "4px 4px 0 0",
+                display: "flex",
+                alignItems: "flex-start",
+                justifyContent: "center",
+                paddingTop: 4,
+              }}
+            >
+              <span style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 13, color: "#FFFFFF" }}>{st.place}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
+  const { league, seasonHistory, rosters, players, seasonType } = data;
+  const {
+    championsByOwner, orderedTitles, currentSeasonSuper, ownerForRoster,
+    wallOfShame, historyRows, ownerDirectory, allTimeSuperlatives, mostTitles,
+  } = superlatives;
+
+  function playerLabel(pid) {
+    const p = players?.[pid];
+    if (!p) return pid;
+    const name = `${p.first_name || ""} ${p.last_name || ""}`.trim() || pid;
+    return p.position ? `${name} (${p.position}${p.team ? ` - ${p.team}` : ""})` : name;
+  }
+
+  const scoringType = (() => {
+    const rec = league?.scoring_settings?.rec;
+    if (rec === 1) return "Full PPR";
+    if (rec === 0.5) return "Half PPR";
+    if (rec === 0) return "Standard";
+    return rec !== undefined ? `${rec} pt/rec` : "-";
+  })();
+
+  const seasonNumber = seasonHistory.length + 1;
+  const leagueTitle = `${ordinal(seasonNumber)} Annual ${league?.name || "Dynasty League"}`;
+
+  // Quick lineup breakdown, e.g. "1 QB · 2 RB · 2 WR · 1 TE · 1 FLEX"
+  const lineupSummary = useMemo(() => {
+    const counts = {};
+    let bench = 0;
+    (league?.roster_positions || []).forEach((p) => {
+      if (p === "BN") { bench++; return; }
+      counts[p] = (counts[p] || 0) + 1;
+    });
+    const order = ["QB", "RB", "WR", "TE", "FLEX", "SUPER_FLEX", "REC_FLEX", "WRRB_FLEX", "K", "DEF"];
+    const parts = order
+      .filter((k) => counts[k])
+      .map((k) => `${counts[k]} ${POSITION_LABELS[k] || k}`);
+    Object.keys(counts).filter((k) => !order.includes(k)).forEach((k) => parts.push(`${counts[k]} ${k}`));
+    return { line: parts.join(" · "), bench };
+  }, [league]);
+
+  const settings = league?.settings || {};
+  const waiverLabel = settings.waiver_budget > 0 ? `FAAB ($${settings.waiver_budget})` : "Rolling priority";
+
+  const glanceRows = [
+    ["League size", `${rosters.length} teams`],
+    ["Format", "Head-to-head"],
+    ["Scoring", scoringType],
+    ["Lineup", lineupSummary.line || "-"],
+    ["Bench / IR", `${lineupSummary.bench} bench${settings.reserve_slots ? ` · ${settings.reserve_slots} IR` : ""}${settings.taxi_slots ? ` · ${settings.taxi_slots} taxi` : ""}`],
+    ["Regular season", settings.playoff_week_start ? `${settings.playoff_week_start - 1} weeks` : "-"],
+    ["Playoffs", settings.playoff_teams ? `${settings.playoff_teams}-team bracket, starts Wk ${settings.playoff_week_start ?? "-"}` : "-"],
+    ["Trade deadline", settings.trade_deadline ? `Week ${settings.trade_deadline}` : "None set"],
+    ["Waivers", waiverLabel],
+  ];
+
+  return (
+    <div>
+      {/* Champions banner strip */}
+      {orderedTitles.length > 0 && (
+        <div style={{ marginBottom: 20 }}>
+          <SectionLabel>Champions</SectionLabel>
+          <div style={{ display: "flex", gap: 18, overflowX: "auto", padding: "10px 4px 12px" }}>
+            {orderedTitles.map((s) => (
+              <div key={s.season} style={{ display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0 }}>
+                <div style={{ width: 8, height: 8, borderRadius: "50%", background: COLORS.leather, marginBottom: -1, position: "relative", zIndex: 2 }} />
+                <div
+                  className="banner-pennant"
+                  style={{
+                    minWidth: 130,
+                    background: COLORS.turf,
+                    padding: "14px 14px 22px",
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    gap: 8,
+                    clipPath: "polygon(0 0, 100% 0, 100% 78%, 50% 100%, 0 78%)",
+                  }}
+                >
+                  <Crest name={teamName(s.champion)} logo={avatarUrl(s.champion)} size={38} />
+                  <div style={{ textAlign: "center" }}>
+                    <div style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 13, color: COLORS.yellow }}>
+                      {s.season}
+                    </div>
+                    <div style={{ fontSize: 12, color: COLORS.onTurf, marginTop: 2 }}>
+                      {teamName(s.champion)}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Welcome / league intro */}
+      <Card style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 11, color: COLORS.turfLight, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>
+          Welcome to the league
+        </div>
+        <div style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 22, color: COLORS.turf, marginBottom: 8 }}>
+          {leagueTitle}
+        </div>
+        <div style={{ color: COLORS.muted, fontSize: 14, lineHeight: 1.5, fontWeight: 600 }}>
+          Let's fucking go. Football is back, and it is so back. Somewhere right now some guy who spent his entire
+          offseason rehabbing a torn ACL is about to run full speed into a linebacker so you can win a lineup bet
+          against your buddy from the comfort of your couch. These men train year round, get paid to get hit for a
+          living, and show up anyway. That's real work. Respect it.
+        </div>
+        <div style={{ color: COLORS.muted, fontSize: 14, lineHeight: 1.5, marginTop: 10 }}>
+          Meanwhile we're sitting on our asses in sweatpants, clicking a screen, pretending we're general managers
+          because we know what a bye week is. That's fine. That's the whole bit. Nobody's out here doing agility
+          drills for this league. Just don't be the asshole who forgets to start his flex.
+        </div>
+        <div style={{ color: COLORS.muted, fontSize: 14, lineHeight: 1.5, marginTop: 10 }}>
+          Football is back. Nobody remembers your draft grade in August, and this league sure as hell doesn't hand
+          out participation trophies. Rosters carry over year to year. Every trade is a bet you'd better be ready to
+          back up. There's no rebuild without a plan and no shortcuts to a ring.{" "}
+          {seasonType === "pre"
+            ? `Season ${league?.season} kicks off soon.`
+            : seasonType === "off"
+            ? `Season ${league?.season} is being built right now.`
+            : `Season ${league?.season} is live.`}{" "}
+          Come compete or get out of the way.
+        </div>
+        <div style={{ color: COLORS.muted, fontSize: 14, lineHeight: 1.5, marginTop: 10 }}>
+          Some of you play it safe and call it a system. Some of you talk a big game every single year and never
+          back it up. Some of you get your hearts broken right on schedule and show up again anyway. Some of you
+          are still out here saying this is finally the year, same as every year before it. None of that wins you a
+          single game here. Show up and hit somebody.
+        </div>
+      </Card>
+
+      {/* League at a glance + Titles, side by side */}
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
+        <div style={{ flex: "1 1 320px" }}>
+          <InfoTable title="League at a glance" rows={glanceRows} />
+        </div>
+        <div style={{ flex: "1 1 320px" }}>
+          <SectionLabel>Titles</SectionLabel>
+          {championsByOwner.length === 0 ? (
+            <Card>
+              <div style={{ color: COLORS.muted, borderLeft: `3px solid ${COLORS.leather}`, paddingLeft: 10 }}>No champions crowned yet. That's still this season's to decide.</div>
+            </Card>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {championsByOwner.map((c) => (
+                <Card
+                  key={c.user.user_id}
+                  style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", borderLeft: `3px solid ${teamColor(teamName(c.user))}` }}
+                >
+                  <Crest name={teamName(c.user)} logo={avatarUrl(c.user)} size={32} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600 }}>{withOwner(c.user)}</div>
+                    <div style={{ fontSize: 12, color: COLORS.muted }}>{c.years.slice().sort().join(", ")}</div>
+                  </div>
+                  <div style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 18, color: COLORS.gold, whiteSpace: "nowrap" }}>
+                    {c.years.length} {c.years.length === 1 ? "title" : "titles"}
+                  </div>
+                </Card>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* League history: podium by year */}
+      <SectionLabel>League history</SectionLabel>
+      {historyRows.length === 0 ? (
+        <Card style={{ marginBottom: 14 }}>
+          <div style={{ color: COLORS.muted }}>
+            This is the earliest linked season for your league. History fills in automatically as seasons stack up.
+          </div>
+        </Card>
+      ) : (
+        <div style={{ marginBottom: 14 }}>
+          <BalancedGrid
+            items={historyRows.map((s) => ({
+              key: s.season,
+              node: <PodiumRow season={s.season} champion={s.champion} runnerUp={s.runnerUp} third={s.third} />,
+            }))}
+          />
+        </div>
+      )}
+
+      {/* Superlatives + Wall of shame, side by side */}
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ flex: "1 1 320px" }}>
+          <SectionLabel>All-time superlatives</SectionLabel>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <SuperlativeCard
+              accent={SUPERLATIVE_ACCENTS[0]}
+              label="Most titles"
+              value={mostTitles ? `${mostTitles.years.length} ${mostTitles.years.length === 1 ? "title" : "titles"}` : "-"}
+              user={mostTitles?.user}
+            />
+            <SuperlativeCard
+              accent={SUPERLATIVE_ACCENTS[1]}
+              label="Most playoff wins"
+              value={allTimeSuperlatives.mostPlayoffWins ? `${allTimeSuperlatives.mostPlayoffWins.wins} wins` : "-"}
+              user={allTimeSuperlatives.mostPlayoffWins ? ownerDirectory[allTimeSuperlatives.mostPlayoffWins.ownerId] : null}
+            />
+            <SuperlativeCard
+              accent={SUPERLATIVE_ACCENTS[2]}
+              label="Best win %"
+              value={allTimeSuperlatives.bestWinPct ? `${fmt(allTimeSuperlatives.bestWinPct.pct * 100, 0)}% (${allTimeSuperlatives.bestWinPct.wins}-${allTimeSuperlatives.bestWinPct.losses})` : "-"}
+              user={allTimeSuperlatives.bestWinPct ? ownerDirectory[allTimeSuperlatives.bestWinPct.ownerId] : null}
+            />
+            <SuperlativeCard
+              accent={SUPERLATIVE_ACCENTS[3]}
+              label="Highest career PPG"
+              value={allTimeSuperlatives.bestPPG ? `${fmt(allTimeSuperlatives.bestPPG.ppg)} pts` : "-"}
+              user={allTimeSuperlatives.bestPPG ? ownerDirectory[allTimeSuperlatives.bestPPG.ownerId] : null}
+            />
+            <SuperlativeCard
+              accent={SUPERLATIVE_ACCENTS[4]}
+              label="Best regular season"
+              value={allTimeSuperlatives.bestSeason ? `${allTimeSuperlatives.bestSeason.wins}-${allTimeSuperlatives.bestSeason.losses} · ${allTimeSuperlatives.bestSeason.season}` : "-"}
+              user={allTimeSuperlatives.bestSeason ? ownerDirectory[allTimeSuperlatives.bestSeason.ownerId] : null}
+            />
+            <SuperlativeCard
+              accent={SUPERLATIVE_ACCENTS[5]}
+              label="Highest scoring season"
+              value={allTimeSuperlatives.highestScoringSeason ? `${fmt(allTimeSuperlatives.highestScoringSeason.fpts)} pts · ${allTimeSuperlatives.highestScoringSeason.season}` : "-"}
+              user={allTimeSuperlatives.highestScoringSeason ? ownerDirectory[allTimeSuperlatives.highestScoringSeason.ownerId] : null}
+            />
+            <SuperlativeCard
+              accent={SUPERLATIVE_ACCENTS[6]}
+              label="Highest scoring week"
+              value={allTimeSuperlatives.singleGame ? `${fmt(allTimeSuperlatives.singleGame.points)} pts · Wk ${allTimeSuperlatives.singleGame.week}, ${allTimeSuperlatives.singleGame.season}` : "-"}
+              user={allTimeSuperlatives.singleGame?.owner}
+            />
+            <SuperlativeCard
+              accent={SUPERLATIVE_ACCENTS[7]}
+              label="Single-game record"
+              sublabel={allTimeSuperlatives.bestPlayerRecord ? playerLabel(allTimeSuperlatives.bestPlayerRecord.playerId) : null}
+              value={allTimeSuperlatives.bestPlayerRecord ? `${fmt(allTimeSuperlatives.bestPlayerRecord.points)} pts · Wk ${allTimeSuperlatives.bestPlayerRecord.week}, ${allTimeSuperlatives.bestPlayerRecord.season}` : "-"}
+              user={allTimeSuperlatives.bestPlayerRecord?.owner}
+            />
+          </div>
+        </div>
+        <div style={{ flex: "1 1 320px" }}>
+          <SectionLabel>Wall of shame (last place by year)</SectionLabel>
+          {wallOfShame.length === 0 ? (
+            <Card>
+              <div style={{ color: COLORS.muted, borderLeft: `3px solid ${COLORS.leather}`, paddingLeft: 10 }}>No completed seasons yet.</div>
+            </Card>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {wallOfShame.map((s) => (
+                <Card
+                  key={s.season}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                    padding: "8px 12px",
+                    background: COLORS.leatherTint,
+                    borderLeft: `3px solid ${COLORS.leatherDeep}`,
+                  }}
+                >
+                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: COLORS.leatherDeep, width: 48 }}>
+                    {s.season}
+                  </div>
+                  <Crest name={teamName(s.lastPlace)} logo={avatarUrl(s.lastPlace)} size={28} />
+                  <div style={{ fontWeight: 600, color: COLORS.leatherDeep }}>{withOwner(s.lastPlace)}</div>
+                </Card>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const SUPERLATIVE_ACCENTS = ["#FF6B00", "#0E4D33", "#B8860B", "#7B4B27", "#3F7A63", "#C1490A", "#5A371C", "#D9560A"];
+
+function SuperlativeCard({ label, value, user, accent, sublabel }) {
+  return (
+    <Card style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", borderLeft: `3px solid ${accent}` }}>
+      <Crest name={user ? teamName(user) : "-"} logo={user ? avatarUrl(user) : null} size={30} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 11, color: COLORS.muted, textTransform: "uppercase", letterSpacing: "0.04em" }}>{label}</div>
+        <div style={{ fontWeight: 600, fontSize: 13 }}>{sublabel || (user ? withOwner(user) : "Not yet decided")}</div>
+        {sublabel && user ? (
+          <div style={{ fontSize: 11, color: COLORS.muted }}>{withOwner(user)}</div>
+        ) : null}
+      </div>
+      <div style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 15, color: accent, whiteSpace: "nowrap", textAlign: "right" }}>
+        {value}
+      </div>
+    </Card>
+  );
+}
+
+const DUES = {
+  entryFee: 50,
+  note: "Standard payout structure",
+  payout: [
+    { place: "1st", amount: 370 },
+    { place: "2nd", amount: 180 },
+    { place: "3rd", amount: 50 },
+  ],
+};
+
+const POSITION_LABELS = {
+  QB: "QB", RB: "RB", WR: "WR", TE: "TE", K: "K", DEF: "DEF",
+  FLEX: "FLEX", SUPER_FLEX: "SUPERFLEX", REC_FLEX: "WR/TE",
+  WRRB_FLEX: "WR/RB", BN: "Bench", IDP_FLEX: "IDP",
+};
+
+// Measures each item's real rendered height, then splits items between two
+// columns to minimize the height difference between them (greedy longest-first
+// bin packing): a hard guarantee rather than relying on the browser's CSS
+// column-balancing heuristic.
+function BalancedGrid({ items, gap = 12, minWidth = 280 }) {
+  const measureRefs = useRef([]);
+  const [heights, setHeights] = useState(null);
+
+  useEffect(() => {
+    function measure() {
+      setHeights(measureRefs.current.map((el) => (el ? el.offsetHeight : 0)));
+    }
+    measure();
+    const onResize = () => measure();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [items.length]);
+
+  const assignment = useMemo(() => {
+    if (!heights || heights.length !== items.length) {
+      return items.map((_, i) => i % 2);
+    }
+    const order = items.map((_, i) => i).sort((a, b) => heights[b] - heights[a]);
+    const colTotals = [0, 0];
+    const assign = new Array(items.length);
+    order.forEach((i) => {
+      const col = colTotals[0] <= colTotals[1] ? 0 : 1;
+      assign[i] = col;
+      colTotals[col] += heights[i] || 0;
+    });
+    return assign;
+  }, [heights, items.length]);
+
+  const columns = [[], []];
+  items.forEach((item, i) => columns[assignment[i]].push({ item, i }));
+
+  return (
+    <div style={{ display: "flex", gap, flexWrap: "wrap" }}>
+      {columns.map((col, colIdx) => (
+        <div key={colIdx} style={{ flex: `1 1 ${minWidth}px`, display: "flex", flexDirection: "column", gap }}>
+          {col.map(({ item, i }) => (
+            <div key={item.key} ref={(el) => { measureRefs.current[i] = el; }}>
+              {item.node}
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function InfoTable({ title, rows, note, accent }) {
+  return (
+    <div>
+      <SectionLabel>{title}</SectionLabel>
+      <Card style={{ padding: 0, overflow: "hidden", borderLeft: accent ? `3px solid ${accent}` : undefined }}>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <tbody>
+            {rows.map(([label, value], i) => (
+              <tr key={label} style={{ borderTop: i === 0 ? "none" : `1px solid ${COLORS.hairline}` }}>
+                <td
+                  style={{
+                    padding: "7px 12px",
+                    fontSize: 12,
+                    color: COLORS.muted,
+                    width: "50%",
+                  }}
+                >
+                  {label}
+                </td>
+                <td
+                  style={{
+                    padding: "7px 12px",
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 12,
+                    color: accent || COLORS.turf,
+                    fontWeight: 600,
+                  }}
+                >
+                  {value}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Card>
+      {note && <div style={{ fontSize: 11, color: COLORS.muted, marginTop: 6 }}>{note}</div>}
+    </div>
+  );
+}
+
+const SCORING_LABELS = {
+  pass_yd: "Passing yard", pass_td: "Passing TD", pass_int: "Passing INT", pass_2pt: "Passing 2pt",
+  pass_cmp: "Completion", pass_inc: "Incompletion", pass_td_40p: "40+ yd pass TD", pass_td_50p: "50+ yd pass TD",
+  rush_yd: "Rushing yard", rush_td: "Rushing TD", rush_2pt: "Rushing 2pt", rush_att: "Rush attempt",
+  rush_td_40p: "40+ yd rush TD", rush_td_50p: "50+ yd rush TD",
+  rec: "Reception", rec_yd: "Receiving yard", rec_td: "Receiving TD", rec_2pt: "Receiving 2pt",
+  rec_td_40p: "40+ yd rec TD", rec_td_50p: "50+ yd rec TD", bonus_rec_te: "TE reception bonus",
+  bonus_rec_wr: "WR reception bonus", bonus_rec_rb: "RB reception bonus",
+  fum_lost: "Fumble lost", fum_rec_td: "Fumble return TD", ff: "Forced fumble", fum_rec: "Fumble recovery",
+  st_td: "Special teams TD", st_fum_rec: "ST fumble recovery", st_ff: "ST forced fumble",
+  def_td: "Defensive TD", def_st_td: "Def/ST TD", def_st_fum_rec: "Def/ST fumble rec",
+  def_st_ff: "Def/ST forced fumble", sack: "Sack", int: "Interception (def)", safe: "Safety",
+  blk_kick: "Blocked kick", def_2pt: "Defensive 2pt conversion",
+  pts_allow_0: "0 pts allowed", pts_allow_1_6: "1-6 pts allowed", pts_allow_7_13: "7-13 pts allowed",
+  pts_allow_14_20: "14-20 pts allowed", pts_allow_21_27: "21-27 pts allowed", pts_allow_28_34: "28-34 pts allowed",
+  pts_allow_35p: "35+ pts allowed",
+  xpm: "Extra point made", xpmiss: "Extra point missed",
+  fgm_0_19: "FG made 0-19 yd", fgm_20_29: "FG made 20-29 yd", fgm_30_39: "FG made 30-39 yd",
+  fgm_40_49: "FG made 40-49 yd", fgm_50p: "FG made 50+ yd", fgmiss: "FG missed",
+  kr_yd: "Kick return yard", pr_yd: "Punt return yard",
+};
+
+const SCORING_CATEGORIES = {
+  pass_yd: "Passing", pass_td: "Passing", pass_int: "Passing", pass_2pt: "Passing",
+  pass_cmp: "Passing", pass_inc: "Passing", pass_td_40p: "Passing", pass_td_50p: "Passing",
+  rush_yd: "Rushing & receiving", rush_td: "Rushing & receiving", rush_2pt: "Rushing & receiving",
+  rush_att: "Rushing & receiving", rush_td_40p: "Rushing & receiving", rush_td_50p: "Rushing & receiving",
+  rec: "Rushing & receiving", rec_yd: "Rushing & receiving", rec_td: "Rushing & receiving",
+  rec_2pt: "Rushing & receiving", rec_td_40p: "Rushing & receiving", rec_td_50p: "Rushing & receiving",
+  bonus_rec_te: "Rushing & receiving", bonus_rec_wr: "Rushing & receiving", bonus_rec_rb: "Rushing & receiving",
+  xpm: "Kicking", xpmiss: "Kicking", fgm_0_19: "Kicking", fgm_20_29: "Kicking",
+  fgm_30_39: "Kicking", fgm_40_49: "Kicking", fgm_50p: "Kicking", fgmiss: "Kicking",
+  fum_lost: "Defense & special teams", fum_rec_td: "Defense & special teams", ff: "Defense & special teams",
+  fum_rec: "Defense & special teams", st_td: "Defense & special teams", st_fum_rec: "Defense & special teams",
+  st_ff: "Defense & special teams", def_td: "Defense & special teams", def_st_td: "Defense & special teams",
+  def_st_fum_rec: "Defense & special teams", def_st_ff: "Defense & special teams", sack: "Defense & special teams",
+  int: "Defense & special teams", safe: "Defense & special teams", blk_kick: "Defense & special teams",
+  def_2pt: "Defense & special teams", kr_yd: "Defense & special teams", pr_yd: "Defense & special teams",
+  pts_allow_0: "Defense & special teams", pts_allow_1_6: "Defense & special teams", pts_allow_7_13: "Defense & special teams",
+  pts_allow_14_20: "Defense & special teams", pts_allow_21_27: "Defense & special teams",
+  pts_allow_28_34: "Defense & special teams", pts_allow_35p: "Defense & special teams",
+};
+const SCORING_CATEGORY_ORDER = ["Passing", "Rushing & receiving", "Kicking", "Defense & special teams", "Other"];
+const CATEGORY_ACCENTS = {
+  "Passing": "#C1490A",
+  "Rushing & receiving": "#0E4D33",
+  "Kicking": "#B8860B",
+  "Defense & special teams": "#5A371C",
+  "Other": "#6B7A70",
+};
+
+function humanizeKey(key) {
+  return key.split("_").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+}
+
+const WAIVER_TYPE_LABELS = { 0: "Rolling waiver priority", 1: "FAAB", 2: "Reverse standings priority" };
+const LEAGUE_TYPE_LABELS = { 0: "Redraft", 1: "Keeper", 2: "Dynasty" };
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+function RulesTab({ league }) {
+  const positions = league?.roster_positions || [];
+  const starterCounts = {};
+  let benchCount = 0;
+  positions.forEach((p) => {
+    if (p === "BN") { benchCount++; return; }
+    starterCounts[p] = (starterCounts[p] || 0) + 1;
+  });
+
+  const scoring = league?.scoring_settings || {};
+  const rec = scoring.rec;
+  const scoringType = rec === 1 ? "Full PPR" : rec === 0.5 ? "Half PPR" : rec === 0 ? "Standard (no PPR)" : rec !== undefined ? `${rec} pt / reception` : "-";
+
+  const scoringByCategory = useMemo(() => {
+    const groups = {};
+    Object.entries(scoring)
+      .filter(([, v]) => v !== undefined && v !== null && v !== 0)
+      .forEach(([key, v]) => {
+        const cat = SCORING_CATEGORIES[key] || "Other";
+        if (!groups[cat]) groups[cat] = [];
+        groups[cat].push([SCORING_LABELS[key] || humanizeKey(key), v]);
+      });
+    return SCORING_CATEGORY_ORDER
+      .filter((cat) => groups[cat] && groups[cat].length > 0)
+      .map((cat) => ({ category: cat, rows: groups[cat] }));
+  }, [scoring]);
+
+  const settings = league?.settings || {};
+  const waiverLabel = settings.waiver_budget > 0
+    ? `FAAB budget ($${settings.waiver_budget})`
+    : (WAIVER_TYPE_LABELS[settings.waiver_type] || "Rolling waiver priority");
+  const tradeDeadline = settings.trade_deadline
+    ? `Week ${settings.trade_deadline}`
+    : "No deadline set";
+
+  const rosterRows = [
+    ...Object.entries(starterCounts).map(([pos, count]) => [POSITION_LABELS[pos] || pos, count]),
+    ["Bench", benchCount],
+    ...(settings.taxi_slots ? [["Taxi squad", settings.taxi_slots]] : []),
+    ...(settings.reserve_slots ? [["IR slots", settings.reserve_slots]] : []),
+  ];
+
+  const generalRows = [
+    ["League type", LEAGUE_TYPE_LABELS[settings.type] ?? "Dynasty"],
+    ["League size", settings.num_teams ?? "-"],
+    ["Waivers", waiverLabel],
+    ...(settings.waiver_day_of_week !== undefined ? [["Waiver clear day", WEEKDAYS[settings.waiver_day_of_week] ?? settings.waiver_day_of_week]] : []),
+    ...(settings.waiver_clear_days ? [["Waiver clear days", settings.waiver_clear_days]] : []),
+    ["Trade deadline", tradeDeadline],
+    ...(settings.veto_votes_needed ? [["Trade veto votes needed", settings.veto_votes_needed]] : []),
+    ...(settings.disable_adds !== undefined ? [["Free agent adds", settings.disable_adds ? "Disabled" : "Enabled"]] : []),
+    ...(settings.best_ball ? [["Best ball", "Yes"]] : []),
+    ...(settings.taxi_deadline ? [["Taxi deadline", `Week ${settings.taxi_deadline}`]] : []),
+  ];
+
+  const playoffRows = [
+    ["Playoff teams", settings.playoff_teams ?? "-"],
+    ["Playoffs start", settings.playoff_week_start ? `Week ${settings.playoff_week_start}` : "-"],
+    ...(settings.playoff_round_type !== undefined ? [["Championship format", settings.playoff_round_type === 1 ? "2-week championship" : "1 week per round"]] : []),
+    ...(settings.playoff_seed_type !== undefined ? [["Reseeding", settings.playoff_seed_type ? "Reseed each round" : "Bracket set at start"]] : []),
+  ];
+
+  return (
+    <div>
+      <BalancedGrid
+        items={[
+          {
+            key: "dues",
+            node: (
+              <InfoTable
+                title="Dues & payout"
+                rows={[
+                  ["Entry fee", `$${DUES.entryFee} / manager`],
+                  ...DUES.payout.map((p) => [`${p.place} place`, `$${p.amount}`]),
+                ]}
+                note={`${DUES.note}. Adjust anytime the pot size changes.`}
+              />
+            ),
+          },
+          ...scoringByCategory.map(({ category, rows }) => ({
+            key: category,
+            node: <InfoTable title={`Scoring: ${category}`} rows={rows} accent={CATEGORY_ACCENTS[category]} />,
+          })),
+          { key: "roster", node: <InfoTable title="Roster composition" rows={rosterRows} accent={COLORS.turfLight} /> },
+          { key: "general", node: <InfoTable title="General settings" rows={generalRows} /> },
+          { key: "playoff", node: <InfoTable title="Playoff settings" rows={playoffRows} accent={COLORS.goldDeep} /> },
+        ]}
+      />
+
+      <div style={{ marginTop: 16, fontSize: 11, color: COLORS.muted }}>
+        League is set to {scoringType.toLowerCase()}. Every nonzero scoring rule from Sleeper is broken out above, plus
+        everything else pulled live from your league settings. Change it in Sleeper and it'll update here automatically.
+      </div>
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<App />);
+</script>
+</body>
+</html>
