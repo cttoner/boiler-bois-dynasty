@@ -6,7 +6,7 @@
 <title>Dynasty League</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%230E4D33'/%3E%3Cellipse cx='50' cy='50' rx='32' ry='20' fill='%23FF6B00'/%3E%3Cpath d='M27 50h46M40 42v16M50 40v20M60 42v16' stroke='white' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E" />
 <style>
-  html, body { margin: 0; padding: 0; background: #F4FAF6; }
+  html, body { margin: 0; padding: 0; background: #F4FAF6; overflow-x: hidden; width: 100%; }
   #root { min-height: 100vh; }
 </style>
 <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
@@ -1024,6 +1024,7 @@ function App() {
     color: COLORS.bone,
     minHeight: "100%",
     width: "100%",
+    overflowX: "hidden",
   };
 
   if (data.loading) {
@@ -2299,7 +2300,7 @@ function PlayerRow({ info, first, muted }) {
           {info.position}
         </span>
       )}
-      <span style={{ color: muted ? COLORS.muted : COLORS.bone, fontSize: 13 }}>{info.name}</span>
+      <span style={{ color: muted ? COLORS.muted : COLORS.bone, fontSize: 13, minWidth: 0, flex: "1 1 auto", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{info.name}</span>
       {info.injuryStatus && (
         <span
           style={{
@@ -2317,12 +2318,12 @@ function PlayerRow({ info, first, muted }) {
         </span>
       )}
       {info.age && (
-        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: COLORS.muted }}>
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: COLORS.muted, flexShrink: 0 }}>
           {info.age}
         </span>
       )}
       {info.team && (
-        <span style={{ fontSize: 11, color: COLORS.muted, marginLeft: "auto" }}>{info.team}</span>
+        <span style={{ fontSize: 11, color: COLORS.muted, marginLeft: "auto", flexShrink: 0 }}>{info.team}</span>
       )}
     </div>
   );
