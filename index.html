@@ -2053,13 +2053,13 @@ function RostersTab({ rosters, usersById, players, selectedRosterId, setSelected
                 are the wins you cost yourself by not doing your homework.
               </div>
               <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
-                <div style={{ flex: "1 1 200px" }}>
+                <div style={{ flex: "1 1 200px", minWidth: 180 }}>
                   <StatRow label="Actual points started" value={fmt(lineupIQ.totalActual)} accent={COLORS.turf} />
                 </div>
-                <div style={{ flex: "1 1 200px" }}>
+                <div style={{ flex: "1 1 200px", minWidth: 180 }}>
                   <StatRow label="Optimal lineup total" value={fmt(lineupIQ.totalOptimal)} accent={COLORS.goldDeep} />
                 </div>
-                <div style={{ flex: "1 1 200px" }}>
+                <div style={{ flex: "1 1 200px", minWidth: 180 }}>
                   <StatRow label="Points left on the bench" value={fmt(lineupIQ.totalLeft)} accent={COLORS.leatherDeep} />
                 </div>
               </div>
@@ -2121,7 +2121,7 @@ function RostersTab({ rosters, usersById, players, selectedRosterId, setSelected
             Every linked season for this manager, current one included. No hiding from this.
           </div>
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
-            <div style={{ flex: "1 1 320px", display: "flex", flexDirection: "column", gap: 10 }}>
+            <div style={{ flex: "1 1 320px", minWidth: 280, display: "flex", flexDirection: "column", gap: 10 }}>
               <StatRow
                 label="Best single game (player)"
                 value={teamSuperlatives?.bestGame ? `${fmt(teamSuperlatives.bestGame.points)} pts, Wk ${teamSuperlatives.bestGame.week} ${teamSuperlatives.bestGame.season}` : "-"}
@@ -2134,7 +2134,7 @@ function RostersTab({ rosters, usersById, players, selectedRosterId, setSelected
                 accent={COLORS.turf}
               />
             </div>
-            <div style={{ flex: "1 1 320px", display: "flex", flexDirection: "column", gap: 10 }}>
+            <div style={{ flex: "1 1 320px", minWidth: 280, display: "flex", flexDirection: "column", gap: 10 }}>
               <StatRow
                 label="Highest scoring season"
                 value={teamSuperlatives?.bestSeasonPoints ? `${fmt(teamSuperlatives.bestSeasonPoints.fpts)} pts, ${teamSuperlatives.bestSeasonPoints.season}` : "-"}
@@ -3031,7 +3031,7 @@ function HistoryTab({ rostersById, usersById, standings, seasonHistory, superlat
 
       {historyData && (
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-          <div style={{ flex: "1 1 280px" }}>
+          <div style={{ flex: "1 1 280px", minWidth: 260 }}>
             {historyData.leagueSummaryRows.length > 0 ? (
               <InfoTable title="League summary" rows={historyData.leagueSummaryRows} accent={COLORS.goldDeep} />
             ) : (
@@ -3466,10 +3466,10 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
 
       {/* League at a glance + Titles, side by side */}
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
-        <div style={{ flex: "1 1 320px" }}>
+        <div style={{ flex: "1 1 320px", minWidth: 280 }}>
           <InfoTable title="League at a glance" rows={glanceRows} />
         </div>
-        <div style={{ flex: "1 1 320px" }}>
+        <div style={{ flex: "1 1 320px", minWidth: 280 }}>
           <SectionLabel>Titles</SectionLabel>
           {championsByOwner.length === 0 ? (
             <Card>
@@ -3518,7 +3518,7 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
 
       {/* Superlatives + Wall of shame, side by side */}
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-        <div style={{ flex: "1 1 320px" }}>
+        <div style={{ flex: "1 1 320px", minWidth: 280 }}>
           <SectionLabel>All-time superlatives</SectionLabel>
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             <SuperlativeCard
@@ -3572,7 +3572,7 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
             />
           </div>
         </div>
-        <div style={{ flex: "1 1 320px" }}>
+        <div style={{ flex: "1 1 320px", minWidth: 280 }}>
           <SectionLabel>Wall of shame (last place by year)</SectionLabel>
           {wallOfShame.length === 0 ? (
             <Card>
@@ -3682,7 +3682,7 @@ function BalancedGrid({ items, gap = 12, minWidth = 280 }) {
   return (
     <div style={{ display: "flex", gap, flexWrap: "wrap" }}>
       {columns.map((col, colIdx) => (
-        <div key={colIdx} style={{ flex: `1 1 ${minWidth}px`, display: "flex", flexDirection: "column", gap }}>
+        <div key={colIdx} style={{ flex: `1 1 ${minWidth}px`, minWidth: Math.min(minWidth, 260), display: "flex", flexDirection: "column", gap }}>
           {col.map(({ item, i }) => (
             <div key={item.key} ref={(el) => { measureRefs.current[i] = el; }}>
               {item.node}
