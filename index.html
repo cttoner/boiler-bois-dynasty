@@ -2031,7 +2031,7 @@ function RostersTab({ rosters, usersById, players, selectedRosterId, setSelected
               )}
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 12 }}>
               <div>
                 <SectionLabel>Starters</SectionLabel>
                 {(roster.starters || []).map((pid, i) => (
@@ -3491,7 +3491,7 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
                     <div style={{ fontWeight: 600 }}>{withOwner(c.user)}</div>
                     <div style={{ fontSize: 12, color: COLORS.muted }}>{c.years.slice().sort().join(", ")}</div>
                   </div>
-                  <div style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 18, color: COLORS.gold, whiteSpace: "nowrap" }}>
+                  <div style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 18, color: COLORS.gold, whiteSpace: "nowrap", flexShrink: 0 }}>
                     {c.years.length} {c.years.length === 1 ? "title" : "titles"}
                   </div>
                 </Card>
@@ -3703,7 +3703,7 @@ function InfoTable({ title, rows, note, accent }) {
     <div>
       <SectionLabel>{title}</SectionLabel>
       <Card style={{ padding: 0, overflow: "hidden", borderLeft: accent ? `3px solid ${accent}` : undefined }}>
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
           <tbody>
             {rows.map(([label, value], i) => (
               <tr key={label} style={{ borderTop: i === 0 ? "none" : `1px solid ${COLORS.hairline}` }}>
@@ -3713,6 +3713,7 @@ function InfoTable({ title, rows, note, accent }) {
                     fontSize: 12,
                     color: COLORS.muted,
                     width: "50%",
+                    wordBreak: "break-word",
                   }}
                 >
                   {label}
@@ -3724,6 +3725,7 @@ function InfoTable({ title, rows, note, accent }) {
                     fontSize: 12,
                     color: accent || COLORS.turf,
                     fontWeight: 600,
+                    wordBreak: "break-word",
                   }}
                 >
                   {value}
