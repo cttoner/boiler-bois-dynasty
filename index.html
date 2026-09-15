@@ -22,6 +22,34 @@ const { useEffect, useMemo, useState, useRef } = React;
 const LEAGUE_ID = "1312079841918468096";
 const API = "https://api.sleeper.app/v1";
 
+// Sleeper's full player database is several MB and barely changes hour to
+// hour, so it's cached in localStorage instead of re-downloaded on every
+// single page load. A stale cache (or none at all - private browsing,
+// storage full, whatever) just falls back to a normal network fetch.
+const PLAYERS_CACHE_KEY = "boilerbois_players_cache_v1";
+const PLAYERS_CACHE_MAX_AGE_MS = 12 * 60 * 60 * 1000; // 12 hours
+
+function loadCachedPlayers() {
+  try {
+    const raw = localStorage.getItem(PLAYERS_CACHE_KEY);
+    if (!raw) return null;
+    const cached = JSON.parse(raw);
+    if (!cached.fetchedAt || Date.now() - cached.fetchedAt > PLAYERS_CACHE_MAX_AGE_MS) return null;
+    return cached.players || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function saveCachedPlayers(players) {
+  try {
+    localStorage.setItem(PLAYERS_CACHE_KEY, JSON.stringify({ fetchedAt: Date.now(), players }));
+  } catch (e) {
+    // Storage full, unavailable, or blocked (private browsing, etc.) -
+    // caching is a nice-to-have, so just skip it rather than fail the load.
+  }
+}
+
 const fontImport = `
 @import url('https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
 .page-wrap { max-width: 1120px; margin: 0 auto; width: 100%; }
@@ -167,31 +195,39 @@ function useLeagueData(leagueId) {
         return r ? byOwner[r.owner_id] : null;
       };
 
+      // The playoff bracket and every week's matchups are independent of
+      // each other, so fetch both at once instead of waiting on the
+      // bracket call to finish before starting the much larger batch of
+      // week-by-week matchup fetches.
+      const [bracket, weekResults] = await Promise.all([
+        j(`${API}/league/${seasonLeagueId}/winners_bracket`).catch(() => []),
+        Promise.all(
+          Array.from({ length: 18 }, (_, i) => i + 1).map((w) =>
+            j(`${API}/league/${seasonLeagueId}/matchups/${w}`).catch(() => [])
+          )
+        ),
+      ]);
+
       let champion = null, runnerUp = null, third = null;
       const playoffWins = {}; // owner_id -> win count
       const playoffLosses = {}; // owner_id -> loss count
-      try {
-        const bracket = await j(`${API}/league/${seasonLeagueId}/winners_bracket`);
-        bracket.forEach((m) => {
-          if (m.w) {
-            const winner = rosterOwner(m.w);
-            if (winner) playoffWins[winner.user_id] = (playoffWins[winner.user_id] || 0) + 1;
-          }
-          if (m.l) {
-            const loser = rosterOwner(m.l);
-            if (loser) playoffLosses[loser.user_id] = (playoffLosses[loser.user_id] || 0) + 1;
-          }
-        });
-        const final = bracket.find((m) => m.p === 1 && m.w);
-        if (final) {
-          champion = rosterOwner(final.w);
-          runnerUp = rosterOwner(final.l);
+      (bracket || []).forEach((m) => {
+        if (m.w) {
+          const winner = rosterOwner(m.w);
+          if (winner) playoffWins[winner.user_id] = (playoffWins[winner.user_id] || 0) + 1;
         }
-        const thirdMatch = bracket.find((m) => m.p === 3 && m.w);
-        if (thirdMatch) third = rosterOwner(thirdMatch.w);
-      } catch (e) {
-        // no bracket available
+        if (m.l) {
+          const loser = rosterOwner(m.l);
+          if (loser) playoffLosses[loser.user_id] = (playoffLosses[loser.user_id] || 0) + 1;
+        }
+      });
+      const final = (bracket || []).find((m) => m.p === 1 && m.w);
+      if (final) {
+        champion = rosterOwner(final.w);
+        runnerUp = rosterOwner(final.l);
       }
+      const thirdMatch = (bracket || []).find((m) => m.p === 3 && m.w);
+      if (thirdMatch) third = rosterOwner(thirdMatch.w);
 
       const standings = computeStandings(rosters, users);
       // Fallback to standings if bracket data is missing
@@ -218,67 +254,58 @@ function useLeagueData(leagueId) {
         if (!h2h[a][b]) h2h[a][b] = { w: 0, l: 0, t: 0 };
         h2h[a][b][result]++;
       }
-      let seasonWeekMatchups = {};
-      try {
-        const weekResults = await Promise.all(
-          Array.from({ length: 18 }, (_, i) => i + 1).map((w) =>
-            j(`${API}/league/${seasonLeagueId}/matchups/${w}`).catch(() => [])
-          )
-        );
-        weekResults.forEach((matchups, wi) => {
-          seasonWeekMatchups[wi + 1] = matchups || [];
-          (matchups || []).forEach((m) => {
-            const owner = rosterOwner(m.roster_id);
-            if (!highGame || (m.points ?? 0) > highGame.points) {
-              if (owner) highGame = { owner, points: m.points ?? 0, week: wi + 1 };
+      const seasonWeekMatchups = {};
+      weekResults.forEach((matchups, wi) => {
+        seasonWeekMatchups[wi + 1] = matchups || [];
+        (matchups || []).forEach((m) => {
+          const owner = rosterOwner(m.roster_id);
+          if (!highGame || (m.points ?? 0) > highGame.points) {
+            if (owner) highGame = { owner, points: m.points ?? 0, week: wi + 1 };
+          }
+          if (owner) {
+            const oid = owner.user_id;
+            if (!ownerWeeklyHigh[oid] || (m.points ?? 0) > ownerWeeklyHigh[oid].points) {
+              ownerWeeklyHigh[oid] = { points: m.points ?? 0, week: wi + 1 };
+            }
+            if (!ownerPlayerTotals[oid]) ownerPlayerTotals[oid] = {};
+          }
+          Object.entries(m.players_points || {}).forEach(([pid, pts]) => {
+            if (!bestPlayerGame || pts > bestPlayerGame.points) {
+              bestPlayerGame = { playerId: pid, points: pts, week: wi + 1, owner };
             }
             if (owner) {
               const oid = owner.user_id;
-              if (!ownerWeeklyHigh[oid] || (m.points ?? 0) > ownerWeeklyHigh[oid].points) {
-                ownerWeeklyHigh[oid] = { points: m.points ?? 0, week: wi + 1 };
+              if (!ownerBestPlayerGame[oid] || pts > ownerBestPlayerGame[oid].points) {
+                ownerBestPlayerGame[oid] = { playerId: pid, points: pts, week: wi + 1 };
               }
-              if (!ownerPlayerTotals[oid]) ownerPlayerTotals[oid] = {};
-            }
-            Object.entries(m.players_points || {}).forEach(([pid, pts]) => {
-              if (!bestPlayerGame || pts > bestPlayerGame.points) {
-                bestPlayerGame = { playerId: pid, points: pts, week: wi + 1, owner };
-              }
-              if (owner) {
-                const oid = owner.user_id;
-                if (!ownerBestPlayerGame[oid] || pts > ownerBestPlayerGame[oid].points) {
-                  ownerBestPlayerGame[oid] = { playerId: pid, points: pts, week: wi + 1 };
-                }
-                ownerPlayerTotals[oid][pid] = (ownerPlayerTotals[oid][pid] || 0) + pts;
-              }
-            });
-          });
-          const byMatchupId = {};
-          (matchups || []).forEach((m) => {
-            if (!byMatchupId[m.matchup_id]) byMatchupId[m.matchup_id] = [];
-            byMatchupId[m.matchup_id].push(m);
-          });
-          Object.values(byMatchupId).forEach((pair) => {
-            if (pair.length !== 2) return;
-            const ownerA = rosterOwner(pair[0].roster_id)?.user_id;
-            const ownerB = rosterOwner(pair[1].roster_id)?.user_id;
-            const ptsA = pair[0].points ?? 0;
-            const ptsB = pair[1].points ?? 0;
-            if (!ownerA || !ownerB) return;
-            if (ptsA === ptsB) {
-              recordH2H(ownerA, ownerB, "t");
-              recordH2H(ownerB, ownerA, "t");
-            } else if (ptsA > ptsB) {
-              recordH2H(ownerA, ownerB, "w");
-              recordH2H(ownerB, ownerA, "l");
-            } else {
-              recordH2H(ownerA, ownerB, "l");
-              recordH2H(ownerB, ownerA, "w");
+              ownerPlayerTotals[oid][pid] = (ownerPlayerTotals[oid][pid] || 0) + pts;
             }
           });
         });
-      } catch (e) {
-        // ignore, leave highGame/h2h as-is
-      }
+        const byMatchupId = {};
+        (matchups || []).forEach((m) => {
+          if (!byMatchupId[m.matchup_id]) byMatchupId[m.matchup_id] = [];
+          byMatchupId[m.matchup_id].push(m);
+        });
+        Object.values(byMatchupId).forEach((pair) => {
+          if (pair.length !== 2) return;
+          const ownerA = rosterOwner(pair[0].roster_id)?.user_id;
+          const ownerB = rosterOwner(pair[1].roster_id)?.user_id;
+          const ptsA = pair[0].points ?? 0;
+          const ptsB = pair[1].points ?? 0;
+          if (!ownerA || !ownerB) return;
+          if (ptsA === ptsB) {
+            recordH2H(ownerA, ownerB, "t");
+            recordH2H(ownerB, ownerA, "t");
+          } else if (ptsA > ptsB) {
+            recordH2H(ownerA, ownerB, "w");
+            recordH2H(ownerB, ownerA, "l");
+          } else {
+            recordH2H(ownerA, ownerB, "l");
+            recordH2H(ownerB, ownerA, "w");
+          }
+        });
+      });
 
       return {
         champion, runnerUp, third, lastPlace, standings, playoffWins, playoffLosses, highGame, h2h, bestPlayerGame,
@@ -359,36 +386,60 @@ function useLeagueData(leagueId) {
     }
 
     async function walkHistory(startLeague) {
-      const seasons = [];
+      // Phase 1: walk the previous_league_id chain to discover every linked
+      // season's league ID. This step genuinely has to be sequential, since
+      // each season's ID only becomes known after fetching the season
+      // after it - but it's cheap, just one small league object per
+      // season, not the heavier trades/awards/draft data.
+      const chain = [];
       let cursor = startLeague.previous_league_id;
       let guard = 0;
       while (cursor && guard < 25) {
         guard++;
         try {
-          const [seasonLeague, seasonUsers, seasonRosters] = await Promise.all([
-            j(`${API}/league/${cursor}`),
-            j(`${API}/league/${cursor}/users`),
-            j(`${API}/league/${cursor}/rosters`),
-          ]);
-          const awards = await resolveSeasonAwards(cursor, seasonRosters, seasonUsers);
-          const seasonTransactions = await fetchSeasonTrades(cursor, seasonLeague.season, seasonRosters, seasonUsers);
-          const draftPicks = await fetchSeasonDraft(cursor, seasonRosters, seasonUsers);
-          seasons.push({
-            season: seasonLeague.season,
-            leagueId: cursor,
-            users: seasonUsers,
-            rosters: seasonRosters,
-            trades: seasonTransactions.trades,
-            waiverMoves: seasonTransactions.waiverMoves,
-            draftPicks,
-            ...awards,
-          });
+          const seasonLeague = await j(`${API}/league/${cursor}`);
+          chain.push({ leagueId: cursor, season: seasonLeague.season });
           cursor = seasonLeague.previous_league_id;
         } catch (e) {
           cursor = null;
         }
       }
-      return seasons;
+
+      // Phase 2: everything that actually takes real time - rosters,
+      // users, awards, trades, waivers, and the draft - fetches for every
+      // linked season at once instead of making each season wait for the
+      // one before it to finish first. A hiccup fetching one season's data
+      // no longer wipes out every older season behind it either, since
+      // each season now succeeds or fails independently.
+      const results = await Promise.all(
+        chain.map(async ({ leagueId, season }) => {
+          try {
+            const [seasonUsers, seasonRosters] = await Promise.all([
+              j(`${API}/league/${leagueId}/users`),
+              j(`${API}/league/${leagueId}/rosters`),
+            ]);
+            const [awards, seasonTransactions, draftPicks] = await Promise.all([
+              resolveSeasonAwards(leagueId, seasonRosters, seasonUsers),
+              fetchSeasonTrades(leagueId, season, seasonRosters, seasonUsers),
+              fetchSeasonDraft(leagueId, seasonRosters, seasonUsers),
+            ]);
+            return {
+              season,
+              leagueId,
+              users: seasonUsers,
+              rosters: seasonRosters,
+              trades: seasonTransactions.trades,
+              waiverMoves: seasonTransactions.waiverMoves,
+              draftPicks,
+              ...awards,
+            };
+          } catch (e) {
+            return null;
+          }
+        })
+      );
+
+      return results.filter(Boolean);
     }
 
     async function run() {
@@ -405,11 +456,15 @@ function useLeagueData(leagueId) {
         const isActiveSeason = seasonType === "regular" || seasonType === "post";
         const week = isActiveSeason ? Math.max(1, nflState.week || 1) : 1;
 
+        const cachedPlayers = loadCachedPlayers();
         const [users, rosters, playersRaw] = await Promise.all([
           j(`${API}/league/${leagueId}/users`),
           j(`${API}/league/${leagueId}/rosters`),
-          j(`${API}/players/nfl`).catch(() => ({})),
+          cachedPlayers ? Promise.resolve(cachedPlayers) : j(`${API}/players/nfl`).catch(() => ({})),
         ]);
+        if (!cachedPlayers && playersRaw && Object.keys(playersRaw).length > 0) {
+          saveCachedPlayers(playersRaw);
+        }
 
         let matchups = [];
         try {
@@ -1063,7 +1118,7 @@ const TABS = [
   { id: "recap", label: "Recap" },
   { id: "power", label: "Power Rankings" },
   { id: "rosters", label: "Rosters" },
-  { id: "trades", label: "Trades" },
+  { id: "trades", label: "Transactions" },
   { id: "picks", label: "Draft Picks" },
   { id: "history", label: "History" },
 ];
@@ -2582,7 +2637,7 @@ function fitText(ctx, text, maxWidth) {
 // up front so there's no leftover empty space at the bottom. Uses only
 // system-safe fonts (no custom @font-face) so there's no font-loading race
 // before the canvas draws.
-function buildRecapImageDataUrl({ leagueName, season, week, recap, ownerFor, playerLabel }) {
+function buildRecapImageCanvas({ leagueName, season, week, recap, ownerFor, playerLabel }) {
   // Portrait proportions so this reads naturally as a phone-shared image
   // rather than a wide landscape graphic.
   const W = 800;
@@ -2694,9 +2749,25 @@ function buildRecapImageDataUrl({ leagueName, season, week, recap, ownerFor, pla
   ctx.font = "600 15px Georgia, serif";
   ctx.fillText("Generated from live league data", pad, cursorY + 28);
 
-  return canvas.toDataURL("image/png");
+  return canvas;
 }
 
+// Converts a canvas straight to a Blob synchronously (via toDataURL, which
+// is synchronous, rather than the async toBlob callback). This matters on
+// iOS: Safari only allows navigator.share() to fire within the same
+// synchronous tick as the tap that triggered it, so any await beforehand
+// (like the async toBlob callback) can cause the share call to silently
+// fail and fall through to a broken download prompt instead.
+function canvasToBlobSync(canvas) {
+  const dataUrl = canvas.toDataURL("image/png");
+  const [header, base64] = dataUrl.split(",");
+  const mimeMatch = header.match(/:(.*?);/);
+  const mime = mimeMatch ? mimeMatch[1] : "image/png";
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return { blob: new Blob([bytes], { type: mime }), dataUrl };
+}
 
 function RecapTab({ data, rostersById, usersById }) {
   const { players } = data;
@@ -2827,8 +2898,19 @@ function RecapTab({ data, rostersById, usersById }) {
 
   const narrative = buildRecapNarrative({ week: selectedWeek, recap, ownerFor, playerLabel });
 
+  // iOS Safari doesn't support forcing a download via <a download> - the
+  // link just opens the image instead of saving it, which is the "can't
+  // download on my phone" problem. The Web Share API is the real fix
+  // there, but it only works if it's called synchronously within the same
+  // tap that triggered it. Same idea applies to window.open() below for
+  // the fallback path: it's called first, before any of the (slower)
+  // canvas drawing work, so the browser still ties the new tab to this
+  // tap by the time there's actually something to put in it - opening it
+  // after that work risks it getting silently popup-blocked instead.
   function downloadRecapImage() {
-    const url = buildRecapImageDataUrl({
+    const reservedWindow = window.open("", "_blank");
+
+    const canvas = buildRecapImageCanvas({
       leagueName: data.league?.name,
       season: selectedSeason,
       week: selectedWeek,
@@ -2836,10 +2918,34 @@ function RecapTab({ data, rostersById, usersById }) {
       ownerFor,
       playerLabel,
     });
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `week-${selectedWeek}-recap.png`;
-    a.click();
+    const filename = `week-${selectedWeek}-recap.png`;
+    const { blob, dataUrl } = canvasToBlobSync(canvas);
+
+    if (navigator.share && navigator.canShare) {
+      const file = new File([blob], filename, { type: "image/png" });
+      if (navigator.canShare({ files: [file] })) {
+        if (reservedWindow) reservedWindow.close();
+        navigator.share({ files: [file], title: `Week ${selectedWeek} Recap` }).catch(() => {
+          // User backed out of the share sheet, or it failed after the
+          // fact - nothing more to do, the tap has already been used.
+        });
+        return;
+      }
+    }
+
+    if (reservedWindow) {
+      reservedWindow.document.write(
+        `<title>${filename}</title><body style="margin:0;background:#12241C;display:flex;align-items:center;justify-content:center;min-height:100vh;">` +
+        `<img src="${dataUrl}" style="max-width:100%;height:auto;" />` +
+        `</body>`
+      );
+    } else {
+      // Popup blocked - last resort, a plain link the user can tap.
+      const a = document.createElement("a");
+      a.href = dataUrl;
+      a.download = filename;
+      a.click();
+    }
   }
 
   return (
