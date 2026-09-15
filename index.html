@@ -301,15 +301,20 @@ function useLeagueData(leagueId) {
               .catch(() => [])
           )
         );
-        return dedupeTransactionsByMinRound(results.flat())
-          .filter((t) => t.type === "trade" && t.status === "complete")
+        const all = dedupeTransactionsByMinRound(results.flat()).filter((t) => t.status === "complete");
+        const trades = all
+          .filter((t) => t.type === "trade")
           .map((t) => {
             const ownersByRosterId = {};
             (t.roster_ids || []).forEach((rid) => { ownersByRosterId[rid] = rosterOwner(rid); });
             return { ...t, season, ownersByRosterId };
           });
+        const waiverMoves = all
+          .filter((t) => t.type === "waiver" || t.type === "free_agent")
+          .map((t) => ({ ...t, season }));
+        return { trades, waiverMoves };
       } catch (e) {
-        return [];
+        return { trades: [], waiverMoves: [] };
       }
     }
 
@@ -324,17 +329,29 @@ function useLeagueData(leagueId) {
         if (!draftsList || draftsList.length === 0) return [];
         // A season can technically have more than one draft object; pull picks
         // from all of them and combine, in case a league ran more than one.
-        const picksByDraft = await Promise.all(
-          draftsList.map((d) => j(`${API}/draft/${d.draft_id}/picks`).catch(() => []))
+        // Each draft's own detail record carries slot_to_roster_id, the fixed
+        // assignment of "this draft slot belongs to this roster" that a trade's
+        // round/roster_id is really referring to - independent of who actually
+        // ends up making that pick after trades change hands.
+        const picksAndDetail = await Promise.all(
+          draftsList.map(async (d) => {
+            const [picks, detail] = await Promise.all([
+              j(`${API}/draft/${d.draft_id}/picks`).catch(() => []),
+              j(`${API}/draft/${d.draft_id}`).catch(() => null),
+            ]);
+            return { picks, slotToRosterId: detail?.slot_to_roster_id || {} };
+          })
         );
-        return picksByDraft
-          .flat()
-          .map((p) => ({
-            round: p.round,
-            pickNo: p.pick_no,
-            playerId: p.player_id,
-            owner: rosterOwner(p.roster_id),
-          }))
+        return picksAndDetail
+          .flatMap(({ picks, slotToRosterId }) =>
+            (picks || []).map((p) => ({
+              round: p.round,
+              pickNo: p.pick_no,
+              playerId: p.player_id,
+              owner: rosterOwner(p.roster_id),
+              originalRosterId: slotToRosterId[p.draft_slot] ?? null,
+            }))
+          )
           .sort((a, b) => a.pickNo - b.pickNo);
       } catch (e) {
         return [];
@@ -354,14 +371,15 @@ function useLeagueData(leagueId) {
             j(`${API}/league/${cursor}/rosters`),
           ]);
           const awards = await resolveSeasonAwards(cursor, seasonRosters, seasonUsers);
-          const seasonTrades = await fetchSeasonTrades(cursor, seasonLeague.season, seasonRosters, seasonUsers);
+          const seasonTransactions = await fetchSeasonTrades(cursor, seasonLeague.season, seasonRosters, seasonUsers);
           const draftPicks = await fetchSeasonDraft(cursor, seasonRosters, seasonUsers);
           seasons.push({
             season: seasonLeague.season,
             leagueId: cursor,
             users: seasonUsers,
             rosters: seasonRosters,
-            trades: seasonTrades,
+            trades: seasonTransactions.trades,
+            waiverMoves: seasonTransactions.waiverMoves,
             draftPicks,
             ...awards,
           });
@@ -461,17 +479,25 @@ function useLeagueData(leagueId) {
               const r = rosters.find((r) => r.roster_id === rid);
               return r ? byOwnerCurrent[r.owner_id] : null;
             };
-            const picksByDraft = await Promise.all(
-              draftsList.map((d) => j(`${API}/draft/${d.draft_id}/picks`).catch(() => []))
+            const picksAndDetail = await Promise.all(
+              draftsList.map(async (d) => {
+                const [picks, detail] = await Promise.all([
+                  j(`${API}/draft/${d.draft_id}/picks`).catch(() => []),
+                  j(`${API}/draft/${d.draft_id}`).catch(() => null),
+                ]);
+                return { picks, slotToRosterId: detail?.slot_to_roster_id || {} };
+              })
             );
-            currentDraftPicks = picksByDraft
-              .flat()
-              .map((p) => ({
-                round: p.round,
-                pickNo: p.pick_no,
-                playerId: p.player_id,
-                owner: rosterOwnerCurrent(p.roster_id),
-              }))
+            currentDraftPicks = picksAndDetail
+              .flatMap(({ picks, slotToRosterId }) =>
+                (picks || []).map((p) => ({
+                  round: p.round,
+                  pickNo: p.pick_no,
+                  playerId: p.player_id,
+                  owner: rosterOwnerCurrent(p.roster_id),
+                  originalRosterId: slotToRosterId[p.draft_slot] ?? null,
+                }))
+              )
               .sort((a, b) => a.pickNo - b.pickNo);
           }
         } catch (e) {
@@ -965,6 +991,58 @@ function computeStandings(rosters, users) {
     .sort((a, b) => b.winPct - a.winPct || b.fpts - a.fpts);
 }
 
+// Reconstructs standings using only weeks up through throughWeek, for
+// computing what a ranking looked like at an earlier point in the season
+// (e.g. power rankings movement). Unlike computeStandings, which reads the
+// live cumulative totals off each roster's settings, this tallies wins,
+// losses, ties, and points straight from that week's matchup data.
+function computeStandingsThroughWeek(weekMatchups, throughWeek, rosters, users) {
+  const byId = Object.fromEntries(users.map((u) => [u.user_id, u]));
+  const stats = {};
+  rosters.forEach((r) => { stats[r.roster_id] = { wins: 0, losses: 0, ties: 0, fpts: 0, fptsAgainst: 0 }; });
+  Object.keys(weekMatchups || {})
+    .map(Number)
+    .filter((w) => w <= throughWeek)
+    .sort((a, b) => a - b)
+    .forEach((week) => {
+      groupByMatchupId(weekMatchups[week]).forEach((pair) => {
+        pair.forEach((m) => {
+          if (!stats[m.roster_id]) stats[m.roster_id] = { wins: 0, losses: 0, ties: 0, fpts: 0, fptsAgainst: 0 };
+          stats[m.roster_id].fpts += m.points ?? 0;
+        });
+        if (pair.length === 2) {
+          const [a, b] = pair;
+          const aPts = a.points ?? 0, bPts = b.points ?? 0;
+          stats[a.roster_id].fptsAgainst += bPts;
+          stats[b.roster_id].fptsAgainst += aPts;
+          if (aPts === bPts) { stats[a.roster_id].ties++; stats[b.roster_id].ties++; }
+          else if (aPts > bPts) { stats[a.roster_id].wins++; stats[b.roster_id].losses++; }
+          else { stats[b.roster_id].wins++; stats[a.roster_id].losses++; }
+        }
+      });
+    });
+  return rosters
+    .map((r) => {
+      const u = byId[r.owner_id];
+      const s = stats[r.roster_id] || { wins: 0, losses: 0, ties: 0, fpts: 0, fptsAgainst: 0 };
+      const games = s.wins + s.losses + s.ties;
+      return {
+        rosterId: r.roster_id,
+        ownerId: r.owner_id,
+        name: teamName(u),
+        displayName: withOwner(u),
+        avatar: avatarUrl(u),
+        wins: s.wins,
+        losses: s.losses,
+        ties: s.ties,
+        fpts: s.fpts,
+        fptsAgainst: s.fptsAgainst,
+        winPct: games ? (s.wins + s.ties * 0.5) / games : 0,
+      };
+    })
+    .sort((a, b) => b.winPct - a.winPct || b.fpts - a.fpts);
+}
+
 function computePowerRankings(standings) {
   if (standings.length === 0) return [];
   const maxFpts = Math.max(...standings.map((s) => s.fpts), 1);
@@ -1188,7 +1266,7 @@ function App() {
         {tab === "recap" && (
           <RecapTab data={data} rostersById={rostersById} usersById={usersById} />
         )}
-        {tab === "power" && <PowerTab power={power} />}
+        {tab === "power" && <PowerTab power={power} data={data} />}
         {tab === "rosters" && (
           <RostersTab
             rosters={data.rosters}
@@ -1211,6 +1289,7 @@ function App() {
             currentSeason={data.league?.season}
             weekMatchups={data.weekMatchups}
             seasonType={data.seasonType}
+            currentDraftPicks={data.currentDraftPicks}
           />
         )}
         {tab === "picks" && (
@@ -1223,6 +1302,7 @@ function App() {
             currentDraftPicks={data.currentDraftPicks}
             seasonHistory={data.seasonHistory}
             players={data.players}
+            weekMatchups={data.weekMatchups}
           />
         )}
         {tab === "history" && (
@@ -1333,8 +1413,67 @@ function shortLabel(u) {
   return (u.display_name || "?").slice(0, 8);
 }
 
+// Every individual game between two specific managers, across every linked
+// season, oriented so "a" always refers to ownerA regardless of which
+// roster/side they were on that particular season (roster IDs aren't
+// stable across seasons, so this re-resolves owner from each season's own
+// roster list rather than assuming current-season roster IDs apply).
+function computeRivalryGames(ownerA, ownerB, currentSeason, weekMatchups, rosters, users, seasonHistory) {
+  const games = [];
+  function walkSeason(season, wm, rs) {
+    const ownerFor = (rid) => {
+      const r = (rs || []).find((r) => r.roster_id === rid);
+      return r ? r.owner_id : null;
+    };
+    Object.keys(wm || {}).map(Number).sort((a, b) => a - b).forEach((week) => {
+      groupByMatchupId(wm[week]).forEach((pair) => {
+        if (pair.length !== 2) return;
+        const [a, b] = pair;
+        const ownerAId = ownerFor(a.roster_id);
+        const ownerBId = ownerFor(b.roster_id);
+        if (!ownerAId || !ownerBId || ownerAId === ownerBId) return;
+        const pairSet = new Set([ownerAId, ownerBId]);
+        if (!pairSet.has(ownerA) || !pairSet.has(ownerB)) return;
+        const aPts = ownerAId === ownerA ? (a.points ?? 0) : (b.points ?? 0);
+        const bPts = ownerAId === ownerA ? (b.points ?? 0) : (a.points ?? 0);
+        games.push({ season, week, aPts, bPts });
+      });
+    });
+  }
+  (seasonHistory || []).forEach((s) => walkSeason(s.season, s.weekMatchups || {}, s.rosters || []));
+  walkSeason(currentSeason, weekMatchups, rosters);
+  games.sort((x, y) => Number(x.season) - Number(y.season) || x.week - y.week);
+  return games;
+}
+
+function summarizeRivalry(games) {
+  if (!games || games.length === 0) return null;
+  let winsA = 0, winsB = 0, ties = 0, totalA = 0, totalB = 0;
+  let closest = null, blowout = null;
+  games.forEach((g) => {
+    totalA += g.aPts;
+    totalB += g.bPts;
+    const margin = Math.abs(g.aPts - g.bPts);
+    if (g.aPts > g.bPts) winsA++;
+    else if (g.bPts > g.aPts) winsB++;
+    else ties++;
+    if (!closest || margin < closest.margin) closest = { ...g, margin };
+    if (!blowout || margin > blowout.margin) blowout = { ...g, margin };
+  });
+  const last = games[games.length - 1];
+  const winnerSide = (g) => (g.aPts > g.bPts ? "A" : g.bPts > g.aPts ? "B" : "T");
+  const lastWinner = winnerSide(last);
+  let streakCount = 0;
+  for (let i = games.length - 1; i >= 0; i--) {
+    if (winnerSide(games[i]) === lastWinner) streakCount++;
+    else break;
+  }
+  return { winsA, winsB, ties, totalA, totalB, closest, blowout, streak: { who: lastWinner, count: streakCount }, games };
+}
+
 function StandingsTab({ standings, playoffTeams, data, usersById }) {
   const [mode, setMode] = useState("season");
+  const [selectedRivalry, setSelectedRivalry] = useState(null); // { a: ownerId, b: ownerId }
   const { seasonHistory, weekMatchups, rosters, users } = data;
 
   const ownerDirectory = useMemo(() => {
@@ -1410,6 +1549,14 @@ function StandingsTab({ standings, playoffTeams, data, usersById }) {
   }, [seasonHistory, weekMatchups, rosters, usersById]);
 
   const h2hOwnerOrder = allTimeStandings.map((s) => s.ownerId);
+
+  const rivalryDetail = useMemo(() => {
+    if (!selectedRivalry) return null;
+    const games = computeRivalryGames(
+      selectedRivalry.a, selectedRivalry.b, data.league?.season, weekMatchups, rosters, users, seasonHistory
+    );
+    return summarizeRivalry(games);
+  }, [selectedRivalry, data.league, weekMatchups, rosters, users, seasonHistory]);
 
   const seasonColumns = [
     { key: "rank", label: "#", align: "left", sortable: false, accessor: () => 0, render: (r, i) => i + 1 },
@@ -1602,9 +1749,13 @@ function StandingsTab({ standings, playoffTeams, data, usersById }) {
                       const games = rec ? rec.w + rec.l + rec.t : 0;
                       const pct = games ? (rec.w + rec.t * 0.5) / games : 0.5;
                       const { bg, solid } = games ? heatColor(pct) : { bg: COLORS.surfaceLight, solid: COLORS.muted };
+                      const isSelected = selectedRivalry &&
+                        ((selectedRivalry.a === rowId && selectedRivalry.b === colId) ||
+                          (selectedRivalry.a === colId && selectedRivalry.b === rowId));
                       return (
                         <td key={colId} style={{ padding: 2 }}>
                           <div
+                            onClick={() => games && setSelectedRivalry({ a: rowId, b: colId })}
                             style={{
                               width: 46,
                               height: 32,
@@ -1617,6 +1768,9 @@ function StandingsTab({ standings, playoffTeams, data, usersById }) {
                               fontSize: 11,
                               fontWeight: 600,
                               color: games ? solid : COLORS.muted,
+                              cursor: games ? "pointer" : "default",
+                              outline: isSelected ? `2px solid ${COLORS.gold}` : "none",
+                              outlineOffset: -1,
                             }}
                           >
                             {games ? `${rec.w}-${rec.l}${rec.t ? `-${rec.t}` : ""}` : "-"}
@@ -1629,6 +1783,68 @@ function StandingsTab({ standings, playoffTeams, data, usersById }) {
               </tbody>
             </table>
           </Card>
+
+          {rivalryDetail && selectedRivalry && (
+            <div style={{ marginTop: 20 }}>
+              <SectionLabel>
+                Rivalry: {withOwner(ownerDirectory[selectedRivalry.a])} vs {withOwner(ownerDirectory[selectedRivalry.b])}
+              </SectionLabel>
+              <Card>
+                <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 12, flexWrap: "wrap" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <Crest name={teamName(ownerDirectory[selectedRivalry.a])} logo={avatarUrl(ownerDirectory[selectedRivalry.a])} size={28} />
+                    <span style={{ fontWeight: 700, fontSize: 14 }}>{withOwner(ownerDirectory[selectedRivalry.a])}</span>
+                  </div>
+                  <div style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 18, color: COLORS.turf }}>
+                    {rivalryDetail.winsA}-{rivalryDetail.winsB}{rivalryDetail.ties ? `-${rivalryDetail.ties}` : ""}
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <Crest name={teamName(ownerDirectory[selectedRivalry.b])} logo={avatarUrl(ownerDirectory[selectedRivalry.b])} size={28} />
+                    <span style={{ fontWeight: 700, fontSize: 14 }}>{withOwner(ownerDirectory[selectedRivalry.b])}</span>
+                  </div>
+                  <div style={{ fontSize: 12, color: COLORS.muted }}>
+                    {rivalryDetail.games.length} game{rivalryDetail.games.length === 1 ? "" : "s"} played
+                  </div>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
+                  <div style={{ fontSize: 12, color: COLORS.muted }}>
+                    Total points<br />
+                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 14, color: COLORS.bone, fontWeight: 600 }}>
+                      {fmt(rivalryDetail.totalA)} — {fmt(rivalryDetail.totalB)}
+                    </span>
+                  </div>
+                  {rivalryDetail.blowout && (
+                    <div style={{ fontSize: 12, color: COLORS.muted }}>
+                      Biggest blowout ({rivalryDetail.blowout.season} Wk {rivalryDetail.blowout.week})<br />
+                      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 14, color: COLORS.bone, fontWeight: 600 }}>
+                        {rivalryDetail.blowout.aPts === rivalryDetail.blowout.bPts
+                          ? `Tied, ${fmt(rivalryDetail.blowout.margin)} pts`
+                          : `${withOwner(ownerDirectory[rivalryDetail.blowout.aPts > rivalryDetail.blowout.bPts ? selectedRivalry.a : selectedRivalry.b])} by ${fmt(rivalryDetail.blowout.margin)} pts`}
+                      </span>
+                    </div>
+                  )}
+                  {rivalryDetail.closest && (
+                    <div style={{ fontSize: 12, color: COLORS.muted }}>
+                      Closest game ({rivalryDetail.closest.season} Wk {rivalryDetail.closest.week})<br />
+                      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 14, color: COLORS.bone, fontWeight: 600 }}>
+                        {rivalryDetail.closest.aPts === rivalryDetail.closest.bPts
+                          ? `Tied, ${fmt(rivalryDetail.closest.margin)} pts`
+                          : `${withOwner(ownerDirectory[rivalryDetail.closest.aPts > rivalryDetail.closest.bPts ? selectedRivalry.a : selectedRivalry.b])} by ${fmt(rivalryDetail.closest.margin)} pts`}
+                      </span>
+                    </div>
+                  )}
+                  {rivalryDetail.streak.count > 1 && rivalryDetail.streak.who !== "T" && (
+                    <div style={{ fontSize: 12, color: COLORS.muted }}>
+                      Current streak<br />
+                      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 14, color: COLORS.bone, fontWeight: 600 }}>
+                        {withOwner(ownerDirectory[rivalryDetail.streak.who === "A" ? selectedRivalry.a : selectedRivalry.b])} has won {rivalryDetail.streak.count} straight
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </Card>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -1743,22 +1959,82 @@ function groupByMatchupId(matchups) {
   return Object.values(byMatchupId);
 }
 
-function computeWeekRecap(matchups) {
+function computeWeekRecap(matchups, playersDict) {
   if (!matchups || matchups.length === 0) return null;
   const pairs = groupByMatchupId(matchups);
-  let highScore = null, lowScore = null, stud = null, dud = null;
+
+  // Every "best of the week" stat tracks a value plus an array of every
+  // entry tied at that value, not just the first one found - a real tie
+  // (two duds with the exact same rock-bottom score, say) should show
+  // every name, not whichever happened to be checked first.
+  let highScoreVal = -Infinity, highScore = [];
+  let lowScoreVal = Infinity, lowScore = [];
+  let studVal = -Infinity, stud = [];
+  let dudVal = Infinity, dud = [];
+  let benchTragedyVal = -Infinity, benchTragedy = [];
+  let benchStudVal = -Infinity, benchStud = [];
+  let oneManShowVal = -Infinity, oneManShow = [];
+  const zeroClub = [];
+  const positionBestVal = { QB: -Infinity, RB: -Infinity, WR: -Infinity, TE: -Infinity };
+  const positionBest = { QB: [], RB: [], WR: [], TE: [] };
+
   matchups.forEach((m) => {
     const pts = m.points ?? 0;
-    if (!highScore || pts > highScore.points) highScore = { rosterId: m.roster_id, points: pts };
-    if (!lowScore || pts < lowScore.points) lowScore = { rosterId: m.roster_id, points: pts };
-    const starters = (m.starters || []).filter((pid) => pid && pid !== "0");
-    starters.forEach((pid) => {
-      const p = (m.players_points || {})[pid] ?? 0;
-      if (!stud || p > stud.points) stud = { rosterId: m.roster_id, playerId: pid, points: p };
-      if (!dud || p < dud.points) dud = { rosterId: m.roster_id, playerId: pid, points: p };
+    if (pts > highScoreVal) { highScoreVal = pts; highScore = [{ rosterId: m.roster_id, points: pts }]; }
+    else if (pts === highScoreVal) { highScore.push({ rosterId: m.roster_id, points: pts }); }
+    if (pts < lowScoreVal) { lowScoreVal = pts; lowScore = [{ rosterId: m.roster_id, points: pts }]; }
+    else if (pts === lowScoreVal) { lowScore.push({ rosterId: m.roster_id, points: pts }); }
+
+    const startersSet = new Set((m.starters || []).filter((pid) => pid && pid !== "0"));
+    const pointsMap = m.players_points || {};
+
+    startersSet.forEach((pid) => {
+      const p = pointsMap[pid] ?? 0;
+      if (p > studVal) { studVal = p; stud = [{ rosterId: m.roster_id, playerId: pid, points: p }]; }
+      else if (p === studVal) { stud.push({ rosterId: m.roster_id, playerId: pid, points: p }); }
+      if (p < dudVal) { dudVal = p; dud = [{ rosterId: m.roster_id, playerId: pid, points: p }]; }
+      else if (p === dudVal) { dud.push({ rosterId: m.roster_id, playerId: pid, points: p }); }
+      if (p <= 0) zeroClub.push({ rosterId: m.roster_id, playerId: pid, points: p });
+    });
+
+    let teamMaxStarter = null;
+    startersSet.forEach((pid) => {
+      const p = pointsMap[pid] ?? 0;
+      if (!teamMaxStarter || p > teamMaxStarter.points) teamMaxStarter = { playerId: pid, points: p };
+    });
+    if (teamMaxStarter && pts > 0) {
+      const share = teamMaxStarter.points / pts;
+      const entry = { rosterId: m.roster_id, playerId: teamMaxStarter.playerId, points: teamMaxStarter.points, share };
+      if (share > oneManShowVal) { oneManShowVal = share; oneManShow = [entry]; }
+      else if (share === oneManShowVal) { oneManShow.push(entry); }
+    }
+
+    const rosterPlayers = m.players && m.players.length ? m.players : Object.keys(pointsMap);
+    const benchPlayers = rosterPlayers.filter((pid) => pid && pid !== "0" && !startersSet.has(pid));
+    let benchTotal = 0;
+    benchPlayers.forEach((pid) => {
+      const p = pointsMap[pid] ?? 0;
+      benchTotal += p;
+      if (p > benchStudVal) { benchStudVal = p; benchStud = [{ rosterId: m.roster_id, playerId: pid, points: p }]; }
+      else if (p === benchStudVal) { benchStud.push({ rosterId: m.roster_id, playerId: pid, points: p }); }
+    });
+    if (benchTotal > benchTragedyVal) { benchTragedyVal = benchTotal; benchTragedy = [{ rosterId: m.roster_id, points: benchTotal }]; }
+    else if (benchTotal === benchTragedyVal) { benchTragedy.push({ rosterId: m.roster_id, points: benchTotal }); }
+
+    // Best individual performance at each of the four skill positions,
+    // regardless of whether the player actually started that week.
+    rosterPlayers.forEach((pid) => {
+      if (!pid || pid === "0") return;
+      const pos = playersDict?.[pid]?.position;
+      if (!pos || !(pos in positionBestVal)) return;
+      const p = pointsMap[pid] ?? 0;
+      if (p > positionBestVal[pos]) { positionBestVal[pos] = p; positionBest[pos] = [{ rosterId: m.roster_id, playerId: pid, points: p }]; }
+      else if (p === positionBestVal[pos]) { positionBest[pos].push({ rosterId: m.roster_id, playerId: pid, points: p }); }
     });
   });
-  let closest = null, blowout = null;
+
+  let closestVal = Infinity, closest = [];
+  let blowoutVal = -Infinity, blowout = [];
   pairs.forEach((pair) => {
     if (pair.length === 2) {
       const [a, b] = pair;
@@ -1767,72 +2043,500 @@ function computeWeekRecap(matchups) {
       const winnerRid = aPts >= bPts ? a.roster_id : b.roster_id;
       const loserRid = winnerRid === a.roster_id ? b.roster_id : a.roster_id;
       const entry = { margin, winnerRid, loserRid };
-      if (!closest || margin < closest.margin) closest = entry;
-      if (!blowout || margin > blowout.margin) blowout = entry;
+      if (margin < closestVal) { closestVal = margin; closest = [entry]; }
+      else if (margin === closestVal) { closest.push(entry); }
+      if (margin > blowoutVal) { blowoutVal = margin; blowout = [entry]; }
+      else if (margin === blowoutVal) { blowout.push(entry); }
     }
   });
-  return { pairs, highScore, lowScore, stud, dud, closest, blowout };
+
+  // Whoever's score landed closest to the week's average, for better or
+  // (mostly) for a laugh.
+  let deadEven = [];
+  if (matchups.length > 0) {
+    const avg = matchups.reduce((s, m) => s + (m.points ?? 0), 0) / matchups.length;
+    let deadEvenVal = Infinity;
+    matchups.forEach((m) => {
+      const pts = m.points ?? 0;
+      const diff = Math.abs(pts - avg);
+      if (diff < deadEvenVal) { deadEvenVal = diff; deadEven = [{ rosterId: m.roster_id, points: pts, diff, avg }]; }
+      else if (diff === deadEvenVal) { deadEven.push({ rosterId: m.roster_id, points: pts, diff, avg }); }
+    });
+  }
+
+  return {
+    pairs, highScore, lowScore, stud, dud, closest, blowout,
+    benchTragedy, benchStud, oneManShow, zeroClub, positionBest, deadEven,
+  };
+}
+
+// Win/loss/tie record for every roster using only weeks strictly before
+// throughWeek, so a matchup can be judged against what each team's record
+// actually was walking in (used for the upset call-out).
+function computeRecordsThroughWeek(weekMatchups, throughWeek) {
+  const records = {};
+  Object.keys(weekMatchups || {})
+    .map(Number)
+    .filter((w) => w < throughWeek)
+    .sort((a, b) => a - b)
+    .forEach((week) => {
+      groupByMatchupId(weekMatchups[week]).forEach((pair) => {
+        if (pair.length !== 2) return;
+        const [a, b] = pair;
+        const aPts = a.points ?? 0, bPts = b.points ?? 0;
+        if (!records[a.roster_id]) records[a.roster_id] = { w: 0, l: 0, t: 0 };
+        if (!records[b.roster_id]) records[b.roster_id] = { w: 0, l: 0, t: 0 };
+        if (aPts === bPts) { records[a.roster_id].t++; records[b.roster_id].t++; }
+        else if (aPts > bPts) { records[a.roster_id].w++; records[b.roster_id].l++; }
+        else { records[b.roster_id].w++; records[a.roster_id].l++; }
+      });
+    });
+  return records;
+}
+
+function winPct(rec) {
+  if (!rec) return 0;
+  const g = rec.w + rec.l + rec.t;
+  return g ? (rec.w + rec.t * 0.5) / g : 0;
+}
+
+// Same shape as the site-wide computeStreaks, but capped at a given week so
+// the Recap tab can show what a team's streak looked like at that point in
+// the season rather than always the season-to-date streak.
+function computeStreaksThroughWeek(weekMatchups, throughWeek) {
+  const weeks = Object.keys(weekMatchups || {}).map(Number).filter((w) => w <= throughWeek).sort((a, b) => a - b);
+  const resultsByRoster = {};
+  weeks.forEach((week) => {
+    groupByMatchupId(weekMatchups[week]).forEach((pair) => {
+      if (pair.length !== 2) return;
+      const [a, b] = pair;
+      const aPts = a.points ?? 0, bPts = b.points ?? 0;
+      let ra, rb;
+      if (aPts === bPts) { ra = "T"; rb = "T"; }
+      else if (aPts > bPts) { ra = "W"; rb = "L"; }
+      else { ra = "L"; rb = "W"; }
+      if (!resultsByRoster[a.roster_id]) resultsByRoster[a.roster_id] = [];
+      if (!resultsByRoster[b.roster_id]) resultsByRoster[b.roster_id] = [];
+      resultsByRoster[a.roster_id].push(ra);
+      resultsByRoster[b.roster_id].push(rb);
+    });
+  });
+  const streaks = {};
+  Object.entries(resultsByRoster).forEach(([rid, results]) => {
+    if (results.length === 0) return;
+    const last = results[results.length - 1];
+    let count = 0;
+    for (let i = results.length - 1; i >= 0; i--) {
+      if (results[i] === last) count++;
+      else break;
+    }
+    streaks[rid] = { type: last, count };
+  });
+  return streaks;
+}
+
+function pickLongestStreak(streaks) {
+  let best = null;
+  Object.entries(streaks || {}).forEach(([rid, s]) => {
+    if (s.count >= 3 && (!best || s.count > best.count)) {
+      best = { rosterId: rid, type: s.type, count: s.count };
+    }
+  });
+  return best;
+}
+
+// Flags the matchup where the winner had the worse record walking in, by
+// the widest margin. Skipped entirely in Week 1, when nobody has a record yet.
+function computeUpset(pairs, recordsBefore) {
+  let upset = null;
+  pairs.forEach((pair) => {
+    if (pair.length !== 2) return;
+    const [a, b] = pair;
+    const aPts = a.points ?? 0, bPts = b.points ?? 0;
+    if (aPts === bPts) return;
+    const winnerRid = aPts > bPts ? a.roster_id : b.roster_id;
+    const loserRid = winnerRid === a.roster_id ? b.roster_id : a.roster_id;
+    const winnerRec = recordsBefore[winnerRid];
+    const loserRec = recordsBefore[loserRid];
+    const winnerGames = winnerRec ? winnerRec.w + winnerRec.l + winnerRec.t : 0;
+    const loserGames = loserRec ? loserRec.w + loserRec.l + loserRec.t : 0;
+    if (winnerGames === 0 || loserGames === 0) return;
+    const gap = winPct(loserRec) - winPct(winnerRec);
+    if (gap > 0.15 && (!upset || gap > upset.gap)) {
+      upset = { winnerRid, loserRid, gap, winnerRec, loserRec };
+    }
+  });
+  return upset;
+}
+
+// All-play luck for the selected week only: a "lucky" win is one where the
+// winner beat less than half the league on points; an "unlucky" loss is one
+// where the loser outscored more than half the league and still lost.
+function computeWeeklyLuck(matchups, pairs) {
+  const n = (matchups || []).length;
+  if (n < 2) return { luckyWin: null, unluckyLoss: null };
+  const beatShare = {};
+  matchups.forEach((m) => {
+    let beat = 0;
+    matchups.forEach((other) => {
+      if (other.roster_id !== m.roster_id && (m.points ?? 0) > (other.points ?? 0)) beat++;
+    });
+    beatShare[m.roster_id] = beat / (n - 1);
+  });
+  let luckyWin = null, unluckyLoss = null;
+  pairs.forEach((pair) => {
+    if (pair.length !== 2) return;
+    const [a, b] = pair;
+    const aPts = a.points ?? 0, bPts = b.points ?? 0;
+    if (aPts === bPts) return;
+    const winnerRid = aPts > bPts ? a.roster_id : b.roster_id;
+    const loserRid = winnerRid === a.roster_id ? b.roster_id : a.roster_id;
+    const winnerShare = beatShare[winnerRid];
+    const loserShare = beatShare[loserRid];
+    if (winnerShare < 0.5 && (!luckyWin || winnerShare < luckyWin.share)) {
+      luckyWin = { rosterId: winnerRid, share: winnerShare };
+    }
+    if (loserShare > 0.5 && (!unluckyLoss || loserShare > unluckyLoss.share)) {
+      unluckyLoss = { rosterId: loserRid, share: loserShare };
+    }
+  });
+  return { luckyWin, unluckyLoss };
+}
+
+// Deterministic per-week, per-fact hash so the same category doesn't always
+// land on the same phrase two weeks running just because arrays are short.
+function hashSeed(...parts) {
+  let h = 0;
+  const str = parts.join("|");
+  for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) >>> 0;
+  return h;
 }
 
 function pick(arr, seed) {
   return arr[((seed % arr.length) + arr.length) % arr.length];
 }
 
-function buildRecapNarrative({ week, recap, ownerFor, playerLabel }) {
-  const lines = [];
-  const t = (rid) => teamName(ownerFor(rid));
-
-  if (recap.blowout) {
-    const opts = [
-      `${t(recap.blowout.winnerRid)} put together a statement week, running away from ${t(recap.blowout.loserRid)} by ${fmt(recap.blowout.margin)} points, the widest margin of Week ${week}.`,
-      `Week ${week}'s ugliest final belongs to ${t(recap.blowout.loserRid)}, who never had an answer for ${t(recap.blowout.winnerRid)} in a ${fmt(recap.blowout.margin)}-point blowout.`,
-      `${t(recap.blowout.winnerRid)} didn't just beat ${t(recap.blowout.loserRid)} this week, they buried them by ${fmt(recap.blowout.margin)} points.`,
-    ];
-    lines.push(pick(opts, week));
-  }
-
-  if (recap.closest && recap.closest.winnerRid !== recap.blowout?.winnerRid) {
-    const opts = [
-      `On the other side of the bracket, ${t(recap.closest.winnerRid)} survived ${t(recap.closest.loserRid)} by the slimmest of margins, ${fmt(recap.closest.margin)} point${recap.closest.margin === 1 ? "" : "s"}.`,
-      `The nail-biter of the week came down to ${t(recap.closest.winnerRid)} edging out ${t(recap.closest.loserRid)} by just ${fmt(recap.closest.margin)} point${recap.closest.margin === 1 ? "" : "s"}, the kind of finish that lives in the group chat for days.`,
-      `${t(recap.closest.winnerRid)} needed every last point to hold off ${t(recap.closest.loserRid)}, escaping by ${fmt(recap.closest.margin)} point${recap.closest.margin === 1 ? "" : "s"}.`,
-    ];
-    lines.push(pick(opts, week + 1));
-  }
-
-  if (recap.stud) {
-    const opts = [
-      `${playerLabel(recap.stud.playerId)} was the best thing on any roster this week, dropping ${fmt(recap.stud.points)} points for ${t(recap.stud.rosterId)}.`,
-      `Nobody outproduced ${playerLabel(recap.stud.playerId)}, who went off for ${fmt(recap.stud.points)} points and carried ${t(recap.stud.rosterId)} on the way.`,
-    ];
-    lines.push(pick(opts, week + 2));
-  }
-
-  if (recap.dud) {
-    const opts = [
-      `Meanwhile ${playerLabel(recap.dud.playerId)} gave ${t(recap.dud.rosterId)} next to nothing, a quiet ${fmt(recap.dud.points)}-point week from a starting lineup spot.`,
-      `${t(recap.dud.rosterId)} is still waiting on ${playerLabel(recap.dud.playerId)} to show up, just ${fmt(recap.dud.points)} points out of the lineup this week.`,
-    ];
-    lines.push(pick(opts, week + 3));
-  }
-
-  if (recap.highScore && recap.lowScore) {
-    lines.push(
-      `${t(recap.highScore.rosterId)} led all scorers with ${fmt(recap.highScore.points)} points, while ${t(recap.lowScore.rosterId)} brought up the rear at ${fmt(recap.lowScore.points)}.`
-    );
-  }
-
-  const closers = [
-    `On to Week ${week + 1}. Somebody's about to bench a stud and start their kicker on bye. It's tradition.`,
-    `That's Week ${week} in the books. Talk your talk in the group chat, just get your waiver claims in first.`,
-    `Week ${week} is officially closed for business. Go set your Week ${week + 1} lineup before you forget and regret it.`,
-  ];
-  lines.push(pick(closers, week + 4));
-
-  return lines;
+// Joins a list of strings the human way: "A", "A & B", "A, B, & C" - used
+// wherever a stat has multiple tied entries instead of a single winner.
+function joinList(items) {
+  if (items.length === 0) return "";
+  if (items.length === 1) return items[0];
+  if (items.length === 2) return `${items[0]} & ${items[1]}`;
+  return `${items.slice(0, -1).join(", ")}, & ${items[items.length - 1]}`;
 }
 
-function RecapStatCard({ label, value, sub, accent }) {
+// Single source of truth for turning a tied recap entry (or list of them)
+// into plain names. The narrative, the stat cards, and the share image all
+// read the exact same resolved names here - each just decides on its own
+// how to present them (joined into prose, joined into one card line, or
+// stacked as separate lines), since each context wants a different shape.
+function resolveTiedTeams(entries, ownerFor) {
+  return [...new Set(entries.map((e) => teamName(ownerFor(e.rosterId))))];
+}
+function resolveTiedPlayers(entries, playerLabel, ownerFor) {
+  return entries.map((e) => ({ player: playerLabel(e.playerId), team: teamName(ownerFor(e.rosterId)) }));
+}
+function resolveTiedPairs(entries, ownerFor) {
+  return entries.map((e) => ({ winner: teamName(ownerFor(e.winnerRid)), loser: teamName(ownerFor(e.loserRid)) }));
+}
+
+const RECAP_PHRASES = {
+  lede: [
+    ({ week }) => `Week ${week} is in the books, and it was a certified mess.`,
+    ({ week }) => `Alright, Week ${week}'s over. Let's get into the damage.`,
+    ({ week }) => `Week ${week} happened, for better or for a lot worse if you're some of you.`,
+    ({ week }) => `Well, Week ${week} is done, and someone's fantasy season took a hit.`,
+    ({ week }) => `Another week, another round of bad decisions paying off or blowing up. Here's Week ${week}.`,
+    ({ week }) => `Week ${week} is officially in the record books, and it did not disappoint.`,
+    ({ week }) => `Buckle up, because Week ${week} had a little bit of everything.`,
+  ],
+  blowout: [
+    ({ W, L, M, week }) => `${W} put together a statement week, running the fuck away from ${L} by ${M} points, the widest margin of Week ${week}.`,
+    ({ W, L, M, week }) => `Week ${week}'s ugliest final belongs to ${L}, who never had a prayer against ${W} in a ${M}-point blowout.`,
+    ({ W, L, M }) => `${W} didn't just beat ${L} this week, they buried them by ${M} points and danced on the grave.`,
+    ({ W, L, M }) => `${L} showed up, clocked in, and got sent home early. ${W} won by ${M}, no notes, no mercy.`,
+    ({ W, L, M }) => `Somewhere ${L} is deleting the group chat app entirely. ${W} took this one by ${M} points and zero remorse.`,
+    ({ W, L, M }) => `${W} treated ${L} like a bye week and won by ${M} points doing it.`,
+    ({ W, L, M }) => `This wasn't a fantasy matchup, it was a public execution. ${W} over ${L} by ${M}, rest in peace.`,
+    ({ W, L, M }) => `${L} lost by ${M} points to ${W}, and honestly the scoreboard was being generous.`,
+    ({ W, L, M }) => `${W} absolutely shit on ${L} this week, winning by ${M} points and making it look easy.`,
+  ],
+  closest: [
+    ({ W, L, M, s }) => `Meanwhile, on the other side of the bracket, ${W} survived ${L} by the slimmest of margins, ${M} point${s}.`,
+    ({ W, L, M, s }) => `The nail-biter of the week came down to ${W} edging out ${L} by just ${M} point${s}, the kind of finish that lives in the group chat for days.`,
+    ({ W, L, M, s }) => `Somewhere else, ${W} needed every last point to hold off ${L}, escaping by ${M} point${s}.`,
+    ({ W, L, M, s }) => `${L} is going to be up all night over this one: ${W} won by a gut-wrenching ${M} point${s}.`,
+    ({ W, L, M, s }) => `A flex spot decision probably decided this one. ${W} beat ${L} by ${M} point${s}.`,
+    ({ W, L, M, s }) => `${W} won by ${M} point${s}, which is basically a coin flip that landed on "still a win, don't ask questions."`,
+    ({ W, L, M, s }) => `${L} lost by ${M} point${s} to ${W}, the kind of margin that has you second-guessing every waiver move you made all week.`,
+    ({ W, L, M, s }) => `And then there's ${L}, who lost to ${W} by a soul-crushing ${M} point${s}. That one's going to sting for a while.`,
+  ],
+  stud: [
+    ({ P, T, S }) => `On the individual side, ${P} was the best thing on any roster this week, dropping ${S} points for ${T}.`,
+    ({ P, T, S }) => `Nobody outproduced ${P}, who went absolutely off for ${S} points and carried ${T} the entire way.`,
+    ({ P, T, S }) => `${P} single-handedly made ${T}'s week. ${S} points, no complaints, no notes.`,
+    ({ P, T, S }) => `If you don't own ${P}, you watched ${S} points happen to someone else this week. Painful.`,
+    ({ P, T, S }) => `${P} put up ${S} points and reminded everyone exactly why ${T} drafted them in the first place.`,
+    ({ P, T, S }) => `${T} owes ${P} a beer and probably a thank-you card for that ${S}-point week.`,
+    ({ P, T, S }) => `${P} was cooking. ${S} points for ${T}, and nobody else in the league was close.`,
+    ({ P, T, S }) => `${P} went full menace this week, ${S} points, and turned ${T}'s whole matchup into a formality.`,
+  ],
+  dud: [
+    ({ P, T, S }) => `On the other end, ${P} gave ${T} next to nothing, a quiet ${S}-point week out of a starting lineup spot.`,
+    ({ P, T, S }) => `${T} is still waiting on ${P} to show up, just ${S} points out of the lineup this week.`,
+    ({ P, T, S }) => `${P} started for ${T} and contributed ${S} points, which is a generous way of saying "did fuck all."`,
+    ({ P, T, S }) => `Somewhere ${T} is staring at their lineup wondering why ${P} is still starting. ${S} points this week.`,
+    ({ P, T, S }) => `${P} logged ${S} points and ${T} logged a formal complaint in the group chat.`,
+    ({ P, T, S }) => `Not every week is a good week. ${P} proved that for ${T}, putting up a putrid ${S} points.`,
+    ({ P, T, S }) => `${T} started ${P} with a straight face and got ${S} points back. Brutal.`,
+    ({ P, T, S }) => `${P} was a black hole in ${T}'s lineup this week, ${S} points of pure nothing.`,
+  ],
+  highLow: [
+    ({ HW, H, LW, L }) => `Overall, ${HW} led all scorers with ${H} points, while ${LW} brought up the rear at a sad ${L}.`,
+    ({ HW, H, LW, L }) => `${HW} topped the league at ${H} points this week. ${LW}, on the other hand, mustered a measly ${L}.`,
+    ({ HW, H, LW, L }) => `The league's best score belonged to ${HW} (${H} points). Its worst belonged to ${LW} (${L}), and it wasn't close.`,
+    ({ HW, H, LW, L }) => `${HW} put up ${H} points, the top mark of the week, while ${LW} limped in at a rough ${L}.`,
+    ({ HW, H, LW, L }) => `${HW} had the week's high score at ${H} points. ${LW} scraped the bottom at ${L} and has some explaining to do.`,
+  ],
+  benchTragedy: [
+    ({ BT, BP }) => `Meanwhile ${BT} left ${BP} points sitting dead on the bench this week. Somewhere a start/sit decision is haunting them.`,
+    ({ BT, BP }) => `${BT} had ${BP} points on the bench doing absolutely nothing. That's basically an extra player's worth of points, wasted.`,
+    ({ BT, BP }) => `The waiver wire is undefeated, but so is the bench. ${BT} left ${BP} points sitting right there this week.`,
+    ({ BT, BP }) => `${BT} benched ${BP} points worth of production this week. The lineup card is not this manager's friend.`,
+    ({ BT, BP }) => `${BT} could've had a much better week. ${BP} points stayed glued to the bench doing jack shit.`,
+  ],
+  benchStud: [
+    ({ BT2, BP2, BS }) => `In "shoulda started" news, ${BT2} left ${BP2} on the bench, who quietly put up ${BS} points anyway. That's going to sting.`,
+    ({ BT2, BP2, BS }) => `Somewhere in ${BT2}'s bench sat ${BP2}, racking up ${BS} points nobody got a lick of credit for.`,
+    ({ BT2, BP2, BS }) => `${BP2} scored ${BS} points for ${BT2} and never even got off the bench. Tough scroll through the box score.`,
+    ({ BT2, BP2, BS }) => `${BT2} is going to be refreshing the transaction log wondering why the hell ${BP2} wasn't starting after a ${BS}-point week.`,
+  ],
+  oneManShow: [
+    ({ OT, OP, OShare }) => `${OT} basically fielded one guy this week. ${OP} accounted for ${OShare}% of the whole team's total.`,
+    ({ OT, OP, OShare }) => `${OP} carried ${OT} almost entirely alone, putting up ${OShare}% of the team's points.`,
+    ({ OT, OP, OShare }) => `Without ${OP}, ${OT}'s lineup would've been a ghost town. ${OShare}% of the score came from one guy.`,
+    ({ OT, OP, OShare }) => `${OT} should really buy ${OP} dinner, who covered ${OShare}% of the scoring by himself this week.`,
+  ],
+  zeroClub: [
+    ({ N, names }) => `And spare a moment for the Zero Club: ${N} starter${N === 1 ? "" : "s"} laid a straight-up egg this week, ${names}. Hope those were bye weeks and not real decisions.`,
+    ({ N, names }) => `${N} starter${N === 1 ? "" : "s"} posted a flat zero this week: ${names}. Absolutely nothing to show for it.`,
+    ({ N, names }) => `Somebody should check on ${names}, who combined to contribute jack shit while starting this week.`,
+  ],
+  upset: [
+    ({ W, WRec, L, LRec }) => `And then there's the upset of the week: ${W} (${WRec}) knocked off ${L} (${LRec}) like it was nothing.`,
+    ({ W, WRec, L, LRec }) => `Nobody saw this coming. ${W} (${WRec}) took down ${L} (${LRec}), and the group chat is still processing it.`,
+    ({ W, WRec, L, LRec }) => `${L} (${LRec}) walked in as the favorite and walked out with a loss to ${W} (${WRec}). That's fantasy football for you.`,
+    ({ W, WRec, L, LRec }) => `Chalk lost this week. ${W} (${WRec}) beat a clearly better ${L} (${LRec}) team on paper, and paper doesn't play the games.`,
+    ({ W, WRec, L, LRec }) => `${W} came in at ${WRec} and left with a win over ${L} (${LRec}) anyway. Records are apparently just suggestions.`,
+  ],
+  streakWin: [
+    ({ T, N }) => `Oh, and ${T} has now won ${N} straight. Somebody schedule these people a tougher matchup already.`,
+    ({ T, N }) => `${T} is riding a ${N}-game win streak. Hot at exactly the right time, or the wrong time if you're playing them next.`,
+    ({ T, N }) => `Make it ${N} in a row for ${T}. The rest of the league would very much like this to stop.`,
+    ({ T, N }) => `${T} just keeps winning. ${N} straight and counting, and nobody has a plan for it.`,
+  ],
+  streakLoss: [
+    ({ T, N }) => `On the flip side, ${T} has now dropped ${N} straight. Rough, rough stretch.`,
+    ({ T, N }) => `${N} losses in a row for ${T} now. The waiver wire isn't going to fix this on its own.`,
+    ({ T, N }) => `${T} is stuck in a ${N}-game losing streak with no signs of life whatsoever.`,
+    ({ T, N }) => `${N} straight losses for ${T}. At some point this stops being bad luck and starts being a bad roster.`,
+  ],
+  luckyWin: [
+    ({ LW, pct }) => `${LW} won this week despite outscoring only ${pct}% of the league, the definition of a lucky-ass escape.`,
+    ({ LW, pct }) => `${LW} backed into a win, beating just ${pct}% of the field on points and somehow still ending up in the W column.`,
+    ({ LW, pct }) => `Nobody's asking how ${LW} won this week. They just did, despite a mediocre ${pct}% all-play mark.`,
+    ({ LW, pct }) => `${LW} caught the softest possible matchup and cashed it in. Only ${pct}% of the league scored fewer points, and it was enough.`,
+  ],
+  unluckyLoss: [
+    ({ UL, pct }) => `Meanwhile ${UL} outscored ${pct}% of the league this week and still took an L. Brutal matchup, wrong week to run into it.`,
+    ({ UL, pct }) => `${UL} played well enough to beat almost everyone, ${pct}% of the league in fact, and still lost. Schedule luck is undefeated.`,
+    ({ UL, pct }) => `Somewhere ${UL} is asking why they couldn't have played literally anyone else. ${pct}% of the league scored worse and still walked away with a W.`,
+    ({ UL, pct }) => `${UL} had one of the best weeks in the entire league and has nothing to show for it but an L. Tough beat.`,
+  ],
+  closer: [
+    ({ week, next }) => `On to Week ${next}. Somebody's about to bench a stud and start their kicker on bye. It's tradition.`,
+    ({ week }) => `That's Week ${week} in the books. Talk your shit in the group chat, just get your waiver claims in first.`,
+    ({ week, next }) => `Week ${week} is officially closed for business. Go set your Week ${next} lineup before you forget and ruin your whole week.`,
+    ({ week, next }) => `Another week down, another group chat argument to have. See you at Week ${next}.`,
+    ({ week }) => `Week ${week}'s receipts are in. Print them out and frame them if you won, burn them if you didn't.`,
+    ({ week }) => `That wraps Week ${week}. Somebody's trade offer is about to get a lot more desperate.`,
+    ({ week, next }) => `Week ${week} is history now, which means it's time to obsess over Week ${next} waivers instead of touching grass.`,
+  ],
+  positionBattle: [
+    ({ PB }) => `Around the league, ${PB}.`,
+    ({ PB }) => `Position by position, ${PB}.`,
+    ({ PB }) => `On the individual leaderboard this week, ${PB}.`,
+    ({ PB }) => `Breaking it down by position, ${PB}.`,
+    ({ PB }) => `A quick position-by-position rundown: ${PB}.`,
+  ],
+  deadEven: [
+    ({ T, pts, avg }) => `And then there's ${T}, who landed at ${pts} points, just about dead on the week's average of ${avg}. Maximum chaos avoided, maximum boredom achieved.`,
+    ({ T, pts, avg }) => `${T} put up ${pts} points this week, practically identical to the league average of ${avg}. The most forgettable week possible.`,
+    ({ T, pts, avg }) => `Nothing to see here: ${T} scored ${pts}, right around the league's ${avg}-point average. Peak mediocrity.`,
+    ({ T, pts, avg }) => `${T} threaded the needle this week, landing at ${pts} points against a league average of ${avg}. Neither hero nor zero.`,
+    ({ T, pts, avg }) => `${T} scored almost exactly what everyone else basically scored, ${pts} points versus an average of ${avg}. Riveting stuff.`,
+  ],
+};
+
+function buildRecapNarrative({ week, recap, ownerFor, playerLabel }) {
+  const t = (rid) => teamName(ownerFor(rid));
+  const paragraphs = [];
+
+  // For a tied "best of the week" stat: single entry reads exactly as
+  // before (player name, team name separately). Multiple tied entries
+  // combine each player with their own team so the sentence stays correct
+  // even when the tie spans different rosters.
+  function describeTiedPlayers(entries) {
+    const resolved = resolveTiedPlayers(entries, playerLabel, ownerFor);
+    if (resolved.length === 1) return { P: resolved[0].player, T: resolved[0].team };
+    const combined = resolved.map((r) => `${r.player} (${r.team})`);
+    const teams = [...new Set(resolved.map((r) => r.team))];
+    return { P: joinList(combined), T: joinList(teams) };
+  }
+
+  function describeTiedTeams(entries) {
+    return joinList(resolveTiedTeams(entries, ownerFor));
+  }
+
+  function describeTiedPairs(entries) {
+    const resolved = resolveTiedPairs(entries, ownerFor);
+    const winners = [...new Set(resolved.map((r) => r.winner))];
+    const losers = [...new Set(resolved.map((r) => r.loser))];
+    return { W: joinList(winners), L: joinList(losers) };
+  }
+
+  // Paragraph 1: the lede plus the actual game results (blowout, closest,
+  // upset), so it reads as one continuous rundown of the week's matchups
+  // rather than a list of isolated facts.
+  const gameSentences = [];
+  gameSentences.push(pick(RECAP_PHRASES.lede, hashSeed(week, "lede"))({ week }));
+
+  if (recap.blowout && recap.blowout.length > 0) {
+    const { W, L } = describeTiedPairs(recap.blowout);
+    const ctx = { W, L, M: fmt(recap.blowout[0].margin), week };
+    gameSentences.push(pick(RECAP_PHRASES.blowout, hashSeed(week, "blowout", W, L, ctx.M))(ctx));
+  }
+
+  const blowoutWinners = recap.blowout ? new Set(recap.blowout.map((b) => b.winnerRid)) : new Set();
+  const closestIsDifferent = recap.closest && recap.closest.some((c) => !blowoutWinners.has(c.winnerRid));
+  if (recap.closest && recap.closest.length > 0 && closestIsDifferent) {
+    const { W, L } = describeTiedPairs(recap.closest);
+    const s = fmt(recap.closest[0].margin) === "1.0" ? "" : "s";
+    const ctx = { W, L, M: fmt(recap.closest[0].margin), s };
+    gameSentences.push(pick(RECAP_PHRASES.closest, hashSeed(week, "closest", W, L, ctx.M))(ctx));
+  }
+
+  if (recap.upset) {
+    const recStr = (r) => `${r.w}-${r.l}${r.t ? `-${r.t}` : ""}`;
+    const ctx = {
+      W: t(recap.upset.winnerRid), WRec: recStr(recap.upset.winnerRec),
+      L: t(recap.upset.loserRid), LRec: recStr(recap.upset.loserRec),
+    };
+    gameSentences.push(pick(RECAP_PHRASES.upset, hashSeed(week, "upset", ctx.W, ctx.L))(ctx));
+  }
+  paragraphs.push(gameSentences.join(" "));
+
+  // Paragraph 2: individual performances (stud, dud, high/low), same idea.
+  const performanceSentences = [];
+  if (recap.stud && recap.stud.length > 0) {
+    const { P, T } = describeTiedPlayers(recap.stud);
+    const ctx = { P, T, S: fmt(recap.stud[0].points) };
+    performanceSentences.push(pick(RECAP_PHRASES.stud, hashSeed(week, "stud", P, ctx.S))(ctx));
+  }
+  if (recap.dud && recap.dud.length > 0) {
+    const { P, T } = describeTiedPlayers(recap.dud);
+    const ctx = { P, T, S: fmt(recap.dud[0].points) };
+    performanceSentences.push(pick(RECAP_PHRASES.dud, hashSeed(week, "dud", P, ctx.S))(ctx));
+  }
+  if (recap.highScore?.length > 0 && recap.lowScore?.length > 0) {
+    const ctx = {
+      HW: describeTiedTeams(recap.highScore), H: fmt(recap.highScore[0].points),
+      LW: describeTiedTeams(recap.lowScore), L: fmt(recap.lowScore[0].points),
+    };
+    performanceSentences.push(pick(RECAP_PHRASES.highLow, hashSeed(week, "highLow", ctx.HW, ctx.LW))(ctx));
+  }
+  if (recap.positionBest) {
+    const order = ["QB", "RB", "WR", "TE"];
+    const posLabel = { QB: "quarterbacks", RB: "running backs", WR: "receivers", TE: "tight ends" };
+    const segments = order
+      .filter((pos) => recap.positionBest[pos]?.length > 0)
+      .map((pos) => {
+        const entries = recap.positionBest[pos];
+        const names = entries.length === 1 ? playerLabel(entries[0].playerId) : joinList(entries.map((e) => playerLabel(e.playerId)));
+        return `${names} paced all ${posLabel[pos]} with ${fmt(entries[0].points)} points`;
+      });
+    if (segments.length > 0) {
+      const PB = segments.length === 1
+        ? segments[0]
+        : `${segments.slice(0, -1).join(", ")}, and ${segments[segments.length - 1]}`;
+      performanceSentences.push(pick(RECAP_PHRASES.positionBattle, hashSeed(week, "positionBattle", PB))({ PB }));
+    }
+  }
+  if (performanceSentences.length > 0) paragraphs.push(performanceSentences.join(" "));
+
+  // Paragraph 3: the deeper-cut stuff (streaks, one rotating flavor stat,
+  // the zero club), also joined into flowing prose.
+  const flavorSentences = [];
+  if (recap.longestStreak) {
+    const ctx = { T: t(recap.longestStreak.rosterId), N: recap.longestStreak.count };
+    const bank = recap.longestStreak.type === "W" ? RECAP_PHRASES.streakWin : RECAP_PHRASES.streakLoss;
+    flavorSentences.push(pick(bank, hashSeed(week, "streak", ctx.T, ctx.N))(ctx));
+  }
+
+  // One extra flavor stat, chosen per week so the recap doesn't run long
+  // every single time but still surfaces the deeper cuts eventually.
+  const flavorCandidates = [];
+  if (recap.benchTragedy?.length > 0 && recap.benchTragedy[0].points > 0) flavorCandidates.push("benchTragedy");
+  if (recap.benchStud?.length > 0 && recap.benchStud[0].points > 0) flavorCandidates.push("benchStud");
+  if (recap.oneManShow?.length > 0 && recap.oneManShow[0].share > 0) flavorCandidates.push("oneManShow");
+  if (recap.weeklyLuck && (recap.weeklyLuck.luckyWin || recap.weeklyLuck.unluckyLoss)) flavorCandidates.push("weeklyLuck");
+  if (recap.deadEven?.length > 0) flavorCandidates.push("deadEven");
+  if (flavorCandidates.length > 0) {
+    const chosen = pick(flavorCandidates, hashSeed(week, "flavorPick"));
+    if (chosen === "benchTragedy") {
+      const BT = describeTiedTeams(recap.benchTragedy);
+      const ctx = { BT, BP: fmt(recap.benchTragedy[0].points) };
+      flavorSentences.push(pick(RECAP_PHRASES.benchTragedy, hashSeed(week, "benchTragedy", BT))(ctx));
+    } else if (chosen === "benchStud") {
+      const { P, T } = describeTiedPlayers(recap.benchStud);
+      const ctx = { BT2: T, BP2: P, BS: fmt(recap.benchStud[0].points) };
+      flavorSentences.push(pick(RECAP_PHRASES.benchStud, hashSeed(week, "benchStud", P))(ctx));
+    } else if (chosen === "oneManShow") {
+      const { P, T } = describeTiedPlayers(recap.oneManShow);
+      const ctx = { OT: T, OP: P, OShare: Math.round(recap.oneManShow[0].share * 100) };
+      flavorSentences.push(pick(RECAP_PHRASES.oneManShow, hashSeed(week, "oneManShow", P))(ctx));
+    } else if (chosen === "weeklyLuck") {
+      if (recap.weeklyLuck.luckyWin) {
+        const ctx = { LW: t(recap.weeklyLuck.luckyWin.rosterId), pct: Math.round(recap.weeklyLuck.luckyWin.share * 100) };
+        flavorSentences.push(pick(RECAP_PHRASES.luckyWin, hashSeed(week, "luckyWin", ctx.LW))(ctx));
+      }
+      if (recap.weeklyLuck.unluckyLoss) {
+        const ctx = { UL: t(recap.weeklyLuck.unluckyLoss.rosterId), pct: Math.round(recap.weeklyLuck.unluckyLoss.share * 100) };
+        flavorSentences.push(pick(RECAP_PHRASES.unluckyLoss, hashSeed(week, "unluckyLoss", ctx.UL))(ctx));
+      }
+    } else if (chosen === "deadEven") {
+      const T = describeTiedTeams(recap.deadEven);
+      const ctx = { T, pts: fmt(recap.deadEven[0].points), avg: fmt(recap.deadEven[0].avg) };
+      flavorSentences.push(pick(RECAP_PHRASES.deadEven, hashSeed(week, "deadEven", T))(ctx));
+    }
+  }
+
+  if (recap.zeroClub && recap.zeroClub.length > 0) {
+    const names = recap.zeroClub.map((z) => playerLabel(z.playerId)).join(", ");
+    const ctx = { N: recap.zeroClub.length, names };
+    flavorSentences.push(pick(RECAP_PHRASES.zeroClub, hashSeed(week, "zeroClub", ctx.N))(ctx));
+  }
+
+  if (flavorSentences.length > 0) paragraphs.push(flavorSentences.join(" "));
+
+  // Paragraph 4: short, punchy sign-off, kept on its own.
+  const ctx = { week, next: week + 1 };
+  paragraphs.push(pick(RECAP_PHRASES.closer, hashSeed(week, "closer"))(ctx));
+
+  return paragraphs;
+}
+
+function RecapStatCard({ label, value, sub, accent, hint }) {
   return (
     <Card style={{ borderLeft: `3px solid ${accent}` }}>
       <div style={{ fontSize: 10, color: COLORS.muted, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>
@@ -1842,32 +2546,222 @@ function RecapStatCard({ label, value, sub, accent }) {
         {value}
       </div>
       <div style={{ fontSize: 12, color: COLORS.bone, fontWeight: 600 }}>{sub}</div>
+      {hint && (
+        <div style={{ fontSize: 11, color: COLORS.muted, marginTop: 4, fontStyle: "italic" }}>{hint}</div>
+      )}
     </Card>
   );
 }
 
-function RecapTab({ data, rostersById, usersById }) {
-  const { weekMatchups, matchups: currentMatchups, week: currentWeek, players, seasonType } = data;
+function drawRoundedRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
 
+// Truncates text with an ellipsis if it won't fit in maxWidth, rather than
+// wrapping - keeps every row a fixed, predictable height so the whole image
+// can be sized precisely up front instead of leaving dead space.
+function fitText(ctx, text, maxWidth) {
+  if (ctx.measureText(text).width <= maxWidth) return text;
+  let t = text;
+  while (t.length > 1 && ctx.measureText(`${t}…`).width > maxWidth) {
+    t = t.slice(0, -1);
+  }
+  return `${t}…`;
+}
+
+// Draws a shareable PNG summarizing one week's recap as a grid of stat
+// cards (stud, dud, blowout, closest game, high/low score, shoulda
+// started), sized for dropping straight into a group chat alongside the
+// pasted-in narrative text. Height is computed from the actual card count
+// up front so there's no leftover empty space at the bottom. Uses only
+// system-safe fonts (no custom @font-face) so there's no font-loading race
+// before the canvas draws.
+function buildRecapImageDataUrl({ leagueName, season, week, recap, ownerFor, playerLabel }) {
+  // Portrait proportions so this reads naturally as a phone-shared image
+  // rather than a wide landscape graphic.
+  const W = 800;
+  const pad = 40;
+  const headerH = 170;
+
+  // Each returns one line per tied entry, so a real tie (multiple duds at
+  // the exact same score, say) stacks every name in the card instead of
+  // squeezing them onto a single truncated line.
+  function playersLines(entries) {
+    return resolveTiedPlayers(entries, playerLabel, ownerFor).map((r) => `${r.player} — ${r.team}`);
+  }
+  function teamsLines(entries) {
+    return resolveTiedTeams(entries, ownerFor);
+  }
+  function pairsLines(entries) {
+    return resolveTiedPairs(entries, ownerFor).map((r) => `${r.winner} over ${r.loser}`);
+  }
+
+  const cards = [];
+  if (recap.stud?.length > 0) cards.push({ label: "STUD OF THE WEEK", value: `${fmt(recap.stud[0].points)} PTS`, lines: playersLines(recap.stud), accent: "#FF6B00" });
+  if (recap.dud?.length > 0) cards.push({ label: "DUD OF THE WEEK", value: `${fmt(recap.dud[0].points)} PTS`, lines: playersLines(recap.dud), accent: "#C0392B" });
+  if (recap.blowout?.length > 0) cards.push({ label: "BIGGEST BLOWOUT", value: `${fmt(recap.blowout[0].margin)} PT MARGIN`, lines: pairsLines(recap.blowout), accent: "#7B4B27" });
+  if (recap.closest?.length > 0) cards.push({ label: "CLOSEST GAME", value: `${fmt(recap.closest[0].margin)} PT MARGIN`, lines: pairsLines(recap.closest), accent: "#3F7A63" });
+  if (recap.highScore?.length > 0) cards.push({ label: "HIGH SCORE", value: `${fmt(recap.highScore[0].points)} PTS`, lines: teamsLines(recap.highScore), accent: "#FFD400" });
+  if (recap.lowScore?.length > 0) cards.push({ label: "LOW SCORE", value: `${fmt(recap.lowScore[0].points)} PTS`, lines: teamsLines(recap.lowScore), accent: "#6B7A70" });
+  if (recap.benchStud?.length > 0 && recap.benchStud[0].points > 0) cards.push({ label: "SHOULDA STARTED", value: `${fmt(recap.benchStud[0].points)} PTS`, lines: playersLines(recap.benchStud), accent: "#B8860B" });
+
+  const gap = 16;
+  const colW = (W - pad * 2 - gap) / 2;
+  const lineH = 20;
+  const firstLineY = 84;
+  const cardPadBottom = 22;
+  const cardMinH = 116;
+  const cardHeight = (n) => Math.max(cardMinH, firstLineY + (n - 1) * lineH + cardPadBottom);
+
+  const rowsData = [];
+  for (let i = 0; i < cards.length; i += 2) {
+    const left = cards[i];
+    const right = cards[i + 1] || null;
+    const h = Math.max(cardHeight(left.lines.length), right ? cardHeight(right.lines.length) : 0);
+    rowsData.push({ left, right, h });
+  }
+  const gridH = rowsData.reduce((sum, r) => sum + r.h, 0) + Math.max(0, rowsData.length - 1) * gap;
+  const footerH = 46;
+  const H = headerH + 32 + gridH + footerH + pad;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext("2d");
+
+  ctx.fillStyle = "#F4FAF6";
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.fillStyle = "#0E4D33";
+  ctx.fillRect(0, 0, W, headerH);
+  ctx.fillStyle = "#FFD400";
+  ctx.font = "700 22px Georgia, serif";
+  ctx.fillText(fitText(ctx, (leagueName || "Fantasy League").toUpperCase(), W - pad * 2), pad, 54);
+  ctx.fillStyle = "#FFFFFF";
+  ctx.font = "800 48px Georgia, serif";
+  ctx.fillText(fitText(ctx, `WEEK ${week} RECAP`, W - pad * 2), pad, 112);
+  if (season) {
+    ctx.fillStyle = "rgba(255,255,255,0.72)";
+    ctx.font = "600 19px Georgia, serif";
+    ctx.fillText(`${season} SEASON`, pad, 144);
+  }
+
+  let rowY = headerH + 32;
+
+  rowsData.forEach((row, ri) => {
+    [row.left, row.right].forEach((c, colIdx) => {
+      if (!c) return;
+      const x = pad + colIdx * (colW + gap);
+      const y = rowY;
+
+      ctx.fillStyle = "#FFFFFF";
+      drawRoundedRect(ctx, x, y, colW, row.h, 14);
+      ctx.fill();
+      ctx.fillStyle = c.accent;
+      ctx.fillRect(x, y, 5, row.h);
+
+      ctx.fillStyle = "#6B7A70";
+      ctx.font = "700 13px Georgia, serif";
+      ctx.fillText(fitText(ctx, c.label, colW - 32), x + 20, y + 28);
+
+      ctx.fillStyle = "#0E4D33";
+      ctx.font = "800 26px Georgia, serif";
+      ctx.fillText(fitText(ctx, c.value, colW - 32), x + 20, y + 64);
+
+      ctx.fillStyle = "#12241C";
+      ctx.font = "600 15px Georgia, serif";
+      c.lines.forEach((line, li) => {
+        ctx.fillText(fitText(ctx, line, colW - 32), x + 20, y + firstLineY + li * lineH);
+      });
+    });
+    rowY += row.h + (ri < rowsData.length - 1 ? gap : 0);
+  });
+
+  let cursorY = rowY + 26;
+
+  ctx.strokeStyle = "rgba(14,77,51,0.2)";
+  ctx.beginPath();
+  ctx.moveTo(pad, cursorY);
+  ctx.lineTo(W - pad, cursorY);
+  ctx.stroke();
+  ctx.fillStyle = "#6B7A70";
+  ctx.font = "600 15px Georgia, serif";
+  ctx.fillText("Generated from live league data", pad, cursorY + 28);
+
+  return canvas.toDataURL("image/png");
+}
+
+
+function RecapTab({ data, rostersById, usersById }) {
+  const { players } = data;
+  const currentSeason = data.league?.season;
+
+  const availableSeasons = useMemo(() => {
+    const set = new Set([currentSeason, ...(data.seasonHistory || []).map((s) => s.season)]);
+    return Array.from(set).filter(Boolean).sort((a, b) => Number(b) - Number(a));
+  }, [currentSeason, data.seasonHistory]);
+
+  const [selectedSeason, setSelectedSeason] = useState(null);
+
+  useEffect(() => {
+    if (availableSeasons.length === 0) return;
+    if (selectedSeason === null || !availableSeasons.includes(selectedSeason)) {
+      setSelectedSeason(currentSeason || availableSeasons[0]);
+    }
+  }, [availableSeasons, currentSeason]);
+
+  // Whichever season's weekly matchup data to read from, plus that
+  // season's own roster/owner mapping - a past season reads from its own
+  // linked-history snapshot rather than the live current-season data,
+  // since roster IDs (and sometimes even who owns which team) aren't
+  // guaranteed to match up across seasons.
+  const seasonSnapshot = useMemo(() => {
+    if (selectedSeason === currentSeason) {
+      return { weekMatchups: data.weekMatchups, rostersById, usersById };
+    }
+    const s = (data.seasonHistory || []).find((s) => s.season === selectedSeason);
+    if (!s) return { weekMatchups: {}, rostersById: {}, usersById: {} };
+    return {
+      weekMatchups: s.weekMatchups || {},
+      rostersById: Object.fromEntries((s.rosters || []).map((r) => [r.roster_id, r])),
+      usersById: Object.fromEntries((s.users || []).map((u) => [u.user_id, u])),
+    };
+  }, [selectedSeason, currentSeason, data.weekMatchups, data.seasonHistory, rostersById, usersById]);
+
+  const { weekMatchups, rostersById: seasonRostersById, usersById: seasonUsersById } = seasonSnapshot;
+
+  // Only completed weeks - weekMatchups already excludes the in-progress
+  // current week, so there's nothing else to filter here.
   const availableWeeks = useMemo(() => {
-    const set = new Set(Object.keys(weekMatchups || {}).map(Number));
-    const isActiveSeason = seasonType === "regular" || seasonType === "post";
-    if (isActiveSeason && (currentMatchups || []).length > 0) set.add(currentWeek);
-    return Array.from(set).sort((a, b) => a - b);
-  }, [weekMatchups, currentMatchups, currentWeek, seasonType]);
+    return Object.keys(weekMatchups || {}).map(Number).sort((a, b) => a - b);
+  }, [weekMatchups]);
 
   const [selectedWeek, setSelectedWeek] = useState(null);
+
+  // Whenever the season changes, force a jump to that season's most recent
+  // week - without this, switching seasons where the old week number also
+  // happens to exist in the new season (e.g. both go up to Week 14) would
+  // silently keep showing that same week number instead of the latest one.
+  useEffect(() => {
+    setSelectedWeek(null);
+  }, [selectedSeason]);
 
   useEffect(() => {
     if (availableWeeks.length === 0) return;
     if (selectedWeek === null || !availableWeeks.includes(selectedWeek)) {
       setSelectedWeek(availableWeeks[availableWeeks.length - 1]);
     }
-  }, [availableWeeks]);
+  }, [availableWeeks, selectedWeek]);
 
-  const weekMatchupList = selectedWeek === currentWeek ? (currentMatchups || []) : (weekMatchups?.[selectedWeek] || []);
+  const weekMatchupList = weekMatchups?.[selectedWeek] || [];
 
-  const ownerFor = (rid) => usersById[rostersById[rid]?.owner_id];
+  const ownerFor = (rid) => seasonUsersById[seasonRostersById[rid]?.owner_id];
 
   function playerLabel(pid) {
     const p = players?.[pid];
@@ -1876,7 +2770,34 @@ function RecapTab({ data, rostersById, usersById }) {
     return p.position ? `${name} (${p.position})` : name;
   }
 
-  const recap = useMemo(() => computeWeekRecap(weekMatchupList), [weekMatchupList]);
+  // Sub-line builders for stat cards: single tied entry reads exactly as
+  // before, multiple tied entries join into a readable list instead of
+  // silently dropping every tie but the first one found.
+  function playersSub(entries) {
+    return joinList(resolveTiedPlayers(entries, playerLabel, ownerFor).map((r) => `${r.player} — ${r.team}`));
+  }
+  function teamsSub(entries) {
+    return joinList(resolveTiedTeams(entries, ownerFor));
+  }
+  function pairsSub(entries) {
+    const resolved = resolveTiedPairs(entries, ownerFor);
+    const winners = joinList([...new Set(resolved.map((r) => r.winner))]);
+    const losers = joinList([...new Set(resolved.map((r) => r.loser))]);
+    return `${winners} over ${losers}`;
+  }
+
+  const recap = useMemo(() => {
+    const base = computeWeekRecap(weekMatchupList, players);
+    if (!base || selectedWeek === null) return base;
+    const recordsBefore = computeRecordsThroughWeek(weekMatchups, selectedWeek);
+    const streaksThrough = computeStreaksThroughWeek(weekMatchups, selectedWeek);
+    return {
+      ...base,
+      upset: computeUpset(base.pairs, recordsBefore),
+      longestStreak: pickLongestStreak(streaksThrough),
+      weeklyLuck: computeWeeklyLuck(weekMatchupList, base.pairs),
+    };
+  }, [weekMatchupList, weekMatchups, selectedWeek, players]);
 
   if (availableWeeks.length === 0) {
     return (
@@ -1884,7 +2805,7 @@ function RecapTab({ data, rostersById, usersById }) {
         <SectionLabel>Recap</SectionLabel>
         <Card>
           <div style={{ color: COLORS.muted, borderLeft: `3px solid ${COLORS.leather}`, paddingLeft: 10 }}>
-            No completed weeks yet. Check back once Week 1 wraps.
+            No completed weeks yet for that season. Recaps show up once a week's games are final.
           </div>
         </Card>
       </div>
@@ -1906,30 +2827,90 @@ function RecapTab({ data, rostersById, usersById }) {
 
   const narrative = buildRecapNarrative({ week: selectedWeek, recap, ownerFor, playerLabel });
 
+  function downloadRecapImage() {
+    const url = buildRecapImageDataUrl({
+      leagueName: data.league?.name,
+      season: selectedSeason,
+      week: selectedWeek,
+      recap,
+      ownerFor,
+      playerLabel,
+    });
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `week-${selectedWeek}-recap.png`;
+    a.click();
+  }
+
   return (
     <div>
-      <SectionLabel>Week {selectedWeek} Recap</SectionLabel>
-
-      {availableWeeks.length > 1 && (
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
-          {availableWeeks.map((w) => (
+      {availableSeasons.length > 1 && (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+          {availableSeasons.map((s) => (
             <button
-              key={w}
-              onClick={() => setSelectedWeek(w)}
+              key={s}
+              onClick={() => setSelectedSeason(s)}
               style={{
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 12,
                 padding: "5px 12px",
                 borderRadius: 999,
-                border: `1px solid ${w === selectedWeek ? COLORS.turf : COLORS.hairline}`,
-                background: w === selectedWeek ? COLORS.turf : COLORS.surface,
-                color: w === selectedWeek ? COLORS.onTurf : COLORS.muted,
-                fontSize: 12,
-                fontWeight: 600,
+                border: `1px solid ${s === selectedSeason ? COLORS.gold : COLORS.hairline}`,
+                background: s === selectedSeason ? COLORS.surfaceLight : "transparent",
+                color: s === selectedSeason ? COLORS.gold : COLORS.muted,
+                fontWeight: s === selectedSeason ? 600 : 400,
                 cursor: "pointer",
               }}
             >
-              Wk {w}
+              {s}
             </button>
           ))}
+        </div>
+      )}
+
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 6 }}>
+        <SectionLabel>Week {selectedWeek} Recap</SectionLabel>
+        <button
+          onClick={downloadRecapImage}
+          style={{
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 11,
+            padding: "6px 12px",
+            borderRadius: 6,
+            border: `1px solid ${COLORS.hairline}`,
+            background: COLORS.surface,
+            color: COLORS.turf,
+            cursor: "pointer",
+            fontWeight: 600,
+          }}
+        >
+          ⬇ Share image
+        </button>
+      </div>
+
+      {availableWeeks.length > 1 && (
+        <div style={{ marginBottom: 14 }}>
+          <select
+            value={selectedWeek ?? ""}
+            onChange={(e) => setSelectedWeek(Number(e.target.value))}
+            style={{
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 12,
+              padding: "7px 12px",
+              borderRadius: 6,
+              border: `1px solid ${COLORS.hairline}`,
+              background: COLORS.surface,
+              color: COLORS.turf,
+              cursor: "pointer",
+              fontWeight: 600,
+            }}
+          >
+            {[...availableWeeks].reverse().map((w) => (
+              <option key={w} value={w}>
+                Week {w}
+              </option>
+            ))}
+          </select>
         </div>
       )}
 
@@ -1962,52 +2943,117 @@ function RecapTab({ data, rostersById, usersById }) {
           marginBottom: 20,
         }}
       >
-        {recap.stud && (
+        {recap.stud?.length > 0 && (
           <RecapStatCard
             label="Stud of the Week"
-            value={`${fmt(recap.stud.points)} pts`}
-            sub={`${playerLabel(recap.stud.playerId)} — ${teamName(ownerFor(recap.stud.rosterId))}`}
+            value={`${fmt(recap.stud[0].points)} pts`}
+            sub={playersSub(recap.stud)}
             accent={COLORS.gold}
           />
         )}
-        {recap.dud && (
+        {recap.dud?.length > 0 && (
           <RecapStatCard
             label="Dud of the Week"
-            value={`${fmt(recap.dud.points)} pts`}
-            sub={`${playerLabel(recap.dud.playerId)} — ${teamName(ownerFor(recap.dud.rosterId))}`}
+            value={`${fmt(recap.dud[0].points)} pts`}
+            sub={playersSub(recap.dud)}
             accent={COLORS.red}
           />
         )}
-        {recap.blowout && (
+        {recap.blowout?.length > 0 && (
           <RecapStatCard
             label="Biggest Blowout"
-            value={`${fmt(recap.blowout.margin)} pt margin`}
-            sub={`${teamName(ownerFor(recap.blowout.winnerRid))} over ${teamName(ownerFor(recap.blowout.loserRid))}`}
+            value={`${fmt(recap.blowout[0].margin)} pt margin`}
+            sub={pairsSub(recap.blowout)}
             accent={COLORS.leather}
           />
         )}
-        {recap.closest && (
+        {recap.closest?.length > 0 && (
           <RecapStatCard
             label="Closest Game"
-            value={`${fmt(recap.closest.margin)} pt margin`}
-            sub={`${teamName(ownerFor(recap.closest.winnerRid))} over ${teamName(ownerFor(recap.closest.loserRid))}`}
+            value={`${fmt(recap.closest[0].margin)} pt margin`}
+            sub={pairsSub(recap.closest)}
             accent={COLORS.turfLight}
           />
         )}
-        {recap.highScore && (
+        {recap.highScore?.length > 0 && (
           <RecapStatCard
             label="High Score"
-            value={`${fmt(recap.highScore.points)} pts`}
-            sub={teamName(ownerFor(recap.highScore.rosterId))}
+            value={`${fmt(recap.highScore[0].points)} pts`}
+            sub={teamsSub(recap.highScore)}
             accent={COLORS.yellow}
           />
         )}
-        {recap.lowScore && (
+        {recap.lowScore?.length > 0 && (
           <RecapStatCard
             label="Low Score"
-            value={`${fmt(recap.lowScore.points)} pts`}
-            sub={teamName(ownerFor(recap.lowScore.rosterId))}
+            value={`${fmt(recap.lowScore[0].points)} pts`}
+            sub={teamsSub(recap.lowScore)}
             accent={COLORS.muted}
+          />
+        )}
+        {recap.benchTragedy?.length > 0 && recap.benchTragedy[0].points > 0 && (
+          <RecapStatCard
+            label="Left in the Tank"
+            value={`${fmt(recap.benchTragedy[0].points)} bench pts`}
+            sub={teamsSub(recap.benchTragedy)}
+            accent={COLORS.leatherDeep}
+            hint="Points that stayed on the bench this week"
+          />
+        )}
+        {recap.benchStud?.length > 0 && recap.benchStud[0].points > 0 && (
+          <RecapStatCard
+            label="Shoulda Started"
+            value={`${fmt(recap.benchStud[0].points)} pts`}
+            sub={playersSub(recap.benchStud)}
+            accent={COLORS.goldDeep}
+            hint="Best score by a player who never left the bench"
+          />
+        )}
+        {recap.oneManShow?.length > 0 && recap.oneManShow[0].share > 0 && (
+          <RecapStatCard
+            label="One-Man Show"
+            value={`${Math.round(recap.oneManShow[0].share * 100)}% of the score`}
+            sub={playersSub(recap.oneManShow)}
+            accent={COLORS.turf}
+            hint="Share of the team's total points from one player"
+          />
+        )}
+        {recap.upset && (
+          <RecapStatCard
+            label="Upset of the Week"
+            value={`${recap.upset.winnerRec.w}-${recap.upset.winnerRec.l}${recap.upset.winnerRec.t ? `-${recap.upset.winnerRec.t}` : ""} over ${recap.upset.loserRec.w}-${recap.upset.loserRec.l}${recap.upset.loserRec.t ? `-${recap.upset.loserRec.t}` : ""}`}
+            sub={`${teamName(ownerFor(recap.upset.winnerRid))} over ${teamName(ownerFor(recap.upset.loserRid))}`}
+            accent={COLORS.gold}
+            hint="Records entering the matchup, not the final score"
+          />
+        )}
+        {recap.longestStreak && (
+          <RecapStatCard
+            label={recap.longestStreak.type === "W" ? "Hot Streak" : "Cold Streak"}
+            value={`${recap.longestStreak.count}${recap.longestStreak.type}`}
+            sub={teamName(ownerFor(recap.longestStreak.rosterId))}
+            accent={recap.longestStreak.type === "W" ? COLORS.turf : COLORS.leatherDeep}
+          />
+        )}
+        {["QB", "RB", "WR", "TE"].map(
+          (pos) =>
+            recap.positionBest?.[pos]?.length > 0 && (
+              <RecapStatCard
+                key={pos}
+                label={`Top ${pos}`}
+                value={`${fmt(recap.positionBest[pos][0].points)} pts`}
+                sub={playersSub(recap.positionBest[pos])}
+                accent={positionColor(pos).fg}
+              />
+            )
+        )}
+        {recap.deadEven?.length > 0 && (
+          <RecapStatCard
+            label="Dead Even"
+            value={`${fmt(recap.deadEven[0].points)} pts`}
+            sub={`${teamsSub(recap.deadEven)} (avg: ${fmt(recap.deadEven[0].avg)})`}
+            accent={COLORS.muted}
+            hint="Closest score to the week's league average"
           />
         )}
       </div>
@@ -2043,8 +3089,60 @@ function RecapTab({ data, rostersById, usersById }) {
   );
 }
 
-function PowerTab({ power }) {
+
+function PowerTab({ power, data }) {
   const maxPower = Math.max(...power.map((p) => p.power), 1);
+
+  // Movement since last week: power as it stood right before the most
+  // recently completed week, compared to now. Needs at least two completed
+  // weeks on record, otherwise there's nothing to compare against.
+  const movement = useMemo(() => {
+    const lastCompletedWeek = (data.week || 1) - 1;
+    const priorThroughWeek = lastCompletedWeek - 1;
+    if (priorThroughWeek < 1) return {};
+    const priorStandings = computeStandingsThroughWeek(data.weekMatchups, priorThroughWeek, data.rosters, data.users);
+    const priorPower = computePowerRankings(priorStandings);
+    const priorRank = {};
+    priorPower.forEach((p, i) => { priorRank[p.rosterId] = i + 1; });
+    const result = {};
+    power.forEach((p, i) => {
+      const prev = priorRank[p.rosterId];
+      if (prev !== undefined) result[p.rosterId] = prev - (i + 1);
+    });
+    return result;
+  }, [power, data.week, data.weekMatchups, data.rosters, data.users]);
+
+  // How volatile each team's weekly score is, relative to the rest of the
+  // league. A team can average the same points as another and still play a
+  // totally different kind of season depending on how spread out those
+  // weeks were. Needs at least 3 completed weeks to mean anything.
+  const consistency = useMemo(() => {
+    const scoresByRoster = {};
+    (data.rosters || []).forEach((r) => { scoresByRoster[r.roster_id] = []; });
+    Object.values(data.weekMatchups || {}).forEach((matchups) => {
+      (matchups || []).forEach((m) => {
+        if (!scoresByRoster[m.roster_id]) scoresByRoster[m.roster_id] = [];
+        scoresByRoster[m.roster_id].push(m.points ?? 0);
+      });
+    });
+    const cvByRoster = {};
+    Object.entries(scoresByRoster).forEach(([rid, scores]) => {
+      if (scores.length < 3) return;
+      const mean = scores.reduce((a, b) => a + b, 0) / scores.length;
+      const variance = scores.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / scores.length;
+      const stdDev = Math.sqrt(variance);
+      cvByRoster[rid] = { stdDev, cv: mean > 0 ? stdDev / mean : 0 };
+    });
+    const cvs = Object.values(cvByRoster).map((c) => c.cv).sort((a, b) => a - b);
+    if (cvs.length === 0) return {};
+    const median = cvs[Math.floor(cvs.length / 2)];
+    const result = {};
+    Object.entries(cvByRoster).forEach(([rid, c]) => {
+      result[rid] = { stdDev: c.stdDev, label: c.cv <= median ? "Steady" : "Boom-Bust" };
+    });
+    return result;
+  }, [data.rosters, data.weekMatchups]);
+
   return (
     <div>
       <SectionLabel>Power Rankings</SectionLabel>
@@ -2055,6 +3153,8 @@ function PowerTab({ power }) {
         {power.map((p, i) => {
           const tierColor = i === 0 ? COLORS.yellow : i === 1 ? COLORS.turfLight : i === 2 ? COLORS.leather : COLORS.surfaceLight;
           const barColor = i === 0 ? COLORS.gold : i === 1 ? COLORS.turf : i === 2 ? COLORS.leatherDeep : COLORS.muted;
+          const delta = movement[p.rosterId];
+          const consist = consistency[p.rosterId];
           return (
           <div
             key={p.rosterId}
@@ -2084,7 +3184,24 @@ function PowerTab({ power }) {
             </div>
             <Crest name={p.name} logo={p.avatar} size={34} />
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontWeight: 600 }}>{p.displayName}</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <span style={{ fontWeight: 600 }}>{p.displayName}</span>
+                {consist && (
+                  <span
+                    style={{
+                      fontFamily: "'IBM Plex Mono', monospace",
+                      fontSize: 10,
+                      padding: "2px 7px",
+                      borderRadius: 999,
+                      border: `1px solid ${consist.label === "Steady" ? COLORS.turf : COLORS.goldDeep}`,
+                      color: consist.label === "Steady" ? COLORS.turf : COLORS.goldDeep,
+                    }}
+                    title={`Week-to-week std. dev.: ${fmt(consist.stdDev)} pts`}
+                  >
+                    {consist.label}
+                  </span>
+                )}
+              </div>
               <div style={{ position: "relative", height: 6, background: COLORS.surfaceLight, borderRadius: 3, marginTop: 6 }}>
                 <div
                   style={{
@@ -2098,18 +3215,40 @@ function PowerTab({ power }) {
                   }}
                 />
               </div>
-            </div>
-            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: COLORS.muted, textAlign: "right", width: 80 }}>
-              {fmt(p.wins, 0)}-{fmt(p.losses, 0)}<br />
-              {fmt(p.fpts)} PF
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  flexWrap: "wrap",
+                  marginTop: 6,
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 11,
+                  color: COLORS.muted,
+                }}
+              >
+                <span>{fmt(p.wins, 0)}-{fmt(p.losses, 0)} · {fmt(p.fpts)} PF</span>
+                {delta !== undefined && (
+                  <span
+                    style={{
+                      fontWeight: 700,
+                      color: delta > 0 ? COLORS.turf : delta < 0 ? COLORS.leatherDeep : COLORS.muted,
+                    }}
+                  >
+                    {delta > 0 ? `▲${delta}` : delta < 0 ? `▼${Math.abs(delta)}` : "–"}
+                  </span>
+                )}
+              </div>
             </div>
           </div>
           );
         })}
       </Card>
       <div style={{ marginTop: 10, fontSize: 12, color: COLORS.muted }}>
-        Power score blends win percentage (70%) with points scored (30%). Swap in your own weekly commentary once you're
-        ready to add trash talk.
+        Power score blends win percentage (70%) with points scored (30%). Movement (▲▼) compares to where each team
+        stood before last week's games. Steady/Boom-Bust compares how much a team's weekly score swings around its
+        own average, relative to the rest of the league (needs 3+ completed weeks to show up). Swap in your own
+        weekly commentary once you're ready to add trash talk.
       </div>
     </div>
   );
@@ -2650,10 +3789,18 @@ function PlayerRow({ info, first, muted }) {
   );
 }
 
-function TradesTab({ transactions, rostersById, usersById, players, seasonHistory, currentSeason, weekMatchups, seasonType }) {
+function TradesTab({ transactions, rostersById, usersById, players, seasonHistory, currentSeason, weekMatchups, seasonType, currentDraftPicks }) {
   const [page, setPage] = useState(0);
   const [filterOwnerId, setFilterOwnerId] = useState("all");
+  const [viewMode, setViewMode] = useState("trades");
+  const [traderSeasonFilter, setTraderSeasonFilter] = useState("all");
   const PAGE_SIZE = 8;
+  const isActiveSeason = seasonType === "regular" || seasonType === "post";
+
+  const availableSeasons = useMemo(() => {
+    const set = new Set([currentSeason, ...(seasonHistory || []).map((s) => s.season)]);
+    return Array.from(set).filter(Boolean).sort((a, b) => Number(b) - Number(a));
+  }, [currentSeason, seasonHistory]);
 
   function playerLabel(pid) {
     const p = players[pid];
@@ -2736,6 +3883,24 @@ function TradesTab({ transactions, rostersById, usersById, players, seasonHistor
     return map;
   }, [currentSeason, weekMatchups, seasonHistory]);
 
+  // Resolves a traded draft pick to the player actually taken with it, once
+  // that draft has happened. Keyed by the same (season, round, original
+  // roster) a trade's draft_picks entry describes - originalRosterId comes
+  // from each draft's fixed slot_to_roster_id assignment, not from whoever
+  // ends up owning the pick after trades.
+  const pickResolution = useMemo(() => {
+    const map = {};
+    const indexPicks = (season, picks) => {
+      (picks || []).forEach((p) => {
+        if (p.originalRosterId === null || p.originalRosterId === undefined || !p.playerId) return;
+        map[`${season}-${p.round}-${p.originalRosterId}`] = { playerId: p.playerId, owner: p.owner };
+      });
+    };
+    indexPicks(currentSeason, currentDraftPicks);
+    (seasonHistory || []).forEach((s) => indexPicks(s.season, s.draftPicks));
+    return map;
+  }, [currentSeason, currentDraftPicks, seasonHistory]);
+
   // Merge this season's trades (resolved against live current-season rosters)
   // with every historical season's trades (already resolved against that
   // season's own rosters, to avoid attributing an old trade to the wrong
@@ -2766,7 +3931,8 @@ function TradesTab({ transactions, rostersById, usersById, players, seasonHistor
 
   // Trade count per manager, across every linked season. Since allTrades is
   // sorted newest-first, the first time we see an owner locks in their most
-  // current team name/avatar rather than an old one.
+  // current team name/avatar rather than an old one. This one always stays
+  // all-time - it feeds the manager filter dropdown, not the leaderboard.
   const tradeCounts = useMemo(() => {
     const counts = {};
     allTrades.forEach((t) => {
@@ -2781,22 +3947,26 @@ function TradesTab({ transactions, rostersById, usersById, players, seasonHistor
     return Object.values(counts).sort((a, b) => b.count - a.count);
   }, [allTrades]);
 
+  // Same idea, but respecting the season toggle - this is what the "Most
+  // active traders" leaderboard card actually displays.
+  const traderLeaderboardCounts = useMemo(() => {
+    const trades = traderSeasonFilter === "all" ? allTrades : allTrades.filter((t) => t.season === traderSeasonFilter);
+    const counts = {};
+    trades.forEach((t) => {
+      (t.roster_ids || []).forEach((rid) => {
+        const owner = t.ownersByRosterId?.[rid];
+        if (!owner) return;
+        const oid = owner.user_id;
+        if (!counts[oid]) counts[oid] = { count: 0, user: owner };
+        counts[oid].count++;
+      });
+    });
+    return Object.values(counts).sort((a, b) => b.count - a.count);
+  }, [allTrades, traderSeasonFilter]);
+
   useEffect(() => {
     setPage(0);
   }, [filterOwnerId]);
-
-  if (allTrades.length === 0) {
-    return (
-      <div>
-        <SectionLabel>Trade History</SectionLabel>
-        <Card>
-          <div style={{ color: COLORS.muted, borderLeft: `3px solid ${COLORS.leather}`, paddingLeft: 10 }}>No completed trades yet.</div>
-        </Card>
-      </div>
-    );
-  }
-
-  const isActiveSeason = seasonType === "regular" || seasonType === "post";
 
   return (
     <div>
@@ -2815,25 +3985,93 @@ function TradesTab({ transactions, rostersById, usersById, players, seasonHistor
         </div>
       )}
 
-      {tradeCounts.length > 0 && (
+      <div style={{ display: "flex", gap: 4, marginBottom: 16 }}>
+        {[["trades", "Trades"], ["waivers", "Waivers"]].map(([id, label]) => (
+          <button
+            key={id}
+            onClick={() => setViewMode(id)}
+            style={{
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 12,
+              padding: "7px 14px",
+              borderRadius: 6,
+              border: `1px solid ${viewMode === id ? COLORS.turf : COLORS.hairline}`,
+              background: viewMode === id ? COLORS.turfTint : "transparent",
+              color: viewMode === id ? COLORS.turf : COLORS.muted,
+              cursor: "pointer",
+              fontWeight: viewMode === id ? 600 : 400,
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {viewMode === "waivers" ? (
+        <WaiverWireSection
+          transactions={transactions}
+          rostersById={rostersById}
+          usersById={usersById}
+          players={players}
+          isActiveSeason={isActiveSeason}
+          seasonType={seasonType}
+          seasonHistory={seasonHistory}
+          currentSeason={currentSeason}
+        />
+      ) : allTrades.length === 0 ? (
+        <Card>
+          <div style={{ color: COLORS.muted, borderLeft: `3px solid ${COLORS.leather}`, paddingLeft: 10 }}>No completed trades yet.</div>
+        </Card>
+      ) : (
+        <>
+
+      {(tradeCounts.length > 0 || availableSeasons.length > 0) && (
         <div style={{ marginBottom: 16 }}>
-          <SectionLabel>Most active traders</SectionLabel>
-          <BalancedGrid
-            gap={10}
-            minWidth={220}
-            items={tradeCounts.map((tc) => ({
-              key: tc.user.user_id,
-              node: (
-                <Card style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", borderLeft: `3px solid ${teamColor(teamName(tc.user))}` }}>
-                  <Crest name={teamName(tc.user)} logo={avatarUrl(tc.user)} size={26} />
-                  <span style={{ fontWeight: 600, fontSize: 13, flex: 1 }}>{withOwner(tc.user)}</span>
-                  <span style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 15, color: COLORS.gold }}>
-                    {tc.count}
-                  </span>
-                </Card>
-              ),
-            }))}
-          />
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+            <SectionLabel>Most active traders</SectionLabel>
+            <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+              {[["all", "All time"], ...availableSeasons.map((s) => [s, s])].map(([id, label]) => (
+                <button
+                  key={id}
+                  onClick={() => setTraderSeasonFilter(id)}
+                  style={{
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 11,
+                    padding: "4px 10px",
+                    borderRadius: 999,
+                    border: `1px solid ${traderSeasonFilter === id ? COLORS.turf : COLORS.hairline}`,
+                    background: traderSeasonFilter === id ? COLORS.turfTint : "transparent",
+                    color: traderSeasonFilter === id ? COLORS.turf : COLORS.muted,
+                    cursor: "pointer",
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+          {traderLeaderboardCounts.length > 0 ? (
+            <BalancedGrid
+              gap={10}
+              minWidth={220}
+              items={traderLeaderboardCounts.map((tc) => ({
+                key: tc.user.user_id,
+                node: (
+                  <Card style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", borderLeft: `3px solid ${teamColor(teamName(tc.user))}` }}>
+                    <Crest name={teamName(tc.user)} logo={avatarUrl(tc.user)} size={26} />
+                    <span style={{ fontWeight: 600, fontSize: 13, flex: 1 }}>{withOwner(tc.user)}</span>
+                    <span style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 15, color: COLORS.gold }}>
+                      {tc.count}
+                    </span>
+                  </Card>
+                ),
+              }))}
+            />
+          ) : (
+            <Card>
+              <div style={{ color: COLORS.muted, fontSize: 13 }}>No trades that season.</div>
+            </Card>
+          )}
         </div>
       )}
 
@@ -2917,9 +4155,30 @@ function TradesTab({ transactions, rostersById, usersById, players, seasonHistor
                               </div>
                             );
                           })}
-                          {draftAdds.map((dp, i) => (
-                            <div key={i}>+ {dp.season} Rd {dp.round} Pick</div>
-                          ))}
+                          {draftAdds.map((dp, i) => {
+                            const resolved = pickResolution[`${dp.season}-${dp.round}-${dp.roster_id}`];
+                            const draftedByOther = resolved?.owner && resolved.owner.user_id !== owner?.user_id;
+                            const suppressDraftPts = dp.season === currentSeason && !isActiveSeason;
+                            const draftSincePts = resolved && resolved.owner && !suppressDraftPts
+                              ? computePointsSinceTrade({ season: dp.season }, resolved.playerId, resolved.owner.user_id)
+                              : null;
+                            return (
+                              <div key={i} style={{ marginBottom: 2 }}>
+                                <div>+ {dp.season} Rd {dp.round} Pick</div>
+                                {resolved && (
+                                  <div style={{ fontSize: 11, color: COLORS.turfLight, marginLeft: 12 }}>
+                                    became {playerLabel(resolved.playerId)}
+                                    {draftedByOther ? ` (pick moved again, drafted by ${withOwner(resolved.owner)})` : ""}
+                                  </div>
+                                )}
+                                {draftSincePts !== null && (
+                                  <div style={{ fontSize: 11, color: COLORS.gold, marginLeft: 12 }}>
+                                    {fmt(draftSincePts)} pts since the draft
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
                           {adds.length === 0 && draftAdds.length === 0 && <div>-</div>}
                         </div>
                       </div>
@@ -2971,11 +4230,256 @@ function TradesTab({ transactions, rostersById, usersById, players, seasonHistor
           </button>
         </div>
       )}
+        </>
+      )}
     </div>
   );
 }
 
-function DraftPicksTab({ rosters, usersById, tradedPicks, draftRounds, currentSeason, currentDraftPicks, seasonHistory, players }) {
+function WaiverWireSection({ transactions, rostersById, usersById, players, isActiveSeason, seasonType, seasonHistory, currentSeason }) {
+  const PAGE_SIZE = 10;
+  const [page, setPage] = useState(0);
+  const [waiverSeasonFilter, setWaiverSeasonFilter] = useState("all");
+
+  function playerLabel(pid) {
+    const p = players[pid];
+    if (!p) return pid;
+    return `${p.first_name || ""} ${p.last_name || ""}`.trim();
+  }
+
+  function formatDate(ms) {
+    if (!ms) return null;
+    return new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  }
+
+  // Every waiver/free-agent move across every linked season, current season
+  // included. Historical seasons' moves already carry their own season tag
+  // from the fetch; current-season ones get tagged here.
+  const allWaiverMoves = useMemo(() => {
+    const current = (transactions || [])
+      .filter((t) => (t.type === "waiver" || t.type === "free_agent") && t.status === "complete")
+      .map((t) => ({ ...t, season: currentSeason }));
+    const historical = (seasonHistory || []).flatMap((s) => s.waiverMoves || []);
+    return [...current, ...historical].sort((a, b) => (b.created || 0) - (a.created || 0));
+  }, [transactions, seasonHistory, currentSeason]);
+
+  const availableSeasons = useMemo(() => {
+    const set = new Set([currentSeason, ...(seasonHistory || []).map((s) => s.season)]);
+    return Array.from(set).filter(Boolean).sort((a, b) => Number(b) - Number(a));
+  }, [currentSeason, seasonHistory]);
+
+  const waiverMoves = useMemo(() => {
+    if (waiverSeasonFilter === "all") return allWaiverMoves;
+    return allWaiverMoves.filter((t) => t.season === waiverSeasonFilter);
+  }, [allWaiverMoves, waiverSeasonFilter]);
+
+  const totalPages = Math.max(1, Math.ceil(waiverMoves.length / PAGE_SIZE));
+  const pageMoves = waiverMoves.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE);
+
+  useEffect(() => {
+    setPage(0);
+  }, [waiverSeasonFilter]);
+
+  // Move count per manager, counting each transaction once (not per player
+  // inside it), so a single waiver claim with an add+drop counts as one move.
+  // Respects the season toggle, same as the moves list below it.
+  const waiverCounts = useMemo(() => {
+    const counts = {};
+    waiverMoves.forEach((t) => {
+      const rid = (t.roster_ids || [])[0];
+      const owner = usersById[rostersById[rid]?.owner_id];
+      if (!owner) return;
+      const oid = owner.user_id;
+      if (!counts[oid]) counts[oid] = { count: 0, user: owner };
+      counts[oid].count++;
+    });
+    return Object.values(counts).sort((a, b) => b.count - a.count);
+  }, [waiverMoves, rostersById, usersById]);
+
+  if (allWaiverMoves.length === 0) {
+    return (
+      <Card>
+        <div style={{ color: COLORS.muted, borderLeft: `3px solid ${COLORS.leather}`, paddingLeft: 10 }}>
+          No waiver or free-agent activity logged yet.
+        </div>
+      </Card>
+    );
+  }
+
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 14 }}>
+        Every waiver claim and free-agent pickup, across every linked season. FAAB shown when the league uses it.
+        {!isActiveSeason && (
+          <span style={{ color: COLORS.gold }}>
+            {" "}{seasonType === "pre" ? "Preseason moves shown here are early roster building, not real waiver runs yet." : ""}
+          </span>
+        )}
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+        <SectionLabel>Most active on waivers</SectionLabel>
+        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+          {[["all", "All time"], ...availableSeasons.map((s) => [s, s])].map(([id, label]) => (
+            <button
+              key={id}
+              onClick={() => setWaiverSeasonFilter(id)}
+              style={{
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 11,
+                padding: "4px 10px",
+                borderRadius: 999,
+                border: `1px solid ${waiverSeasonFilter === id ? COLORS.turf : COLORS.hairline}`,
+                background: waiverSeasonFilter === id ? COLORS.turfTint : "transparent",
+                color: waiverSeasonFilter === id ? COLORS.turf : COLORS.muted,
+                cursor: "pointer",
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {waiverCounts.length > 0 ? (
+        <div style={{ marginBottom: 16 }}>
+          <BalancedGrid
+            gap={10}
+            minWidth={220}
+            items={waiverCounts.map((wc) => ({
+              key: wc.user.user_id,
+              node: (
+                <Card style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", borderLeft: `3px solid ${teamColor(teamName(wc.user))}` }}>
+                  <Crest name={teamName(wc.user)} logo={avatarUrl(wc.user)} size={26} />
+                  <span style={{ fontWeight: 600, fontSize: 13, flex: 1 }}>{withOwner(wc.user)}</span>
+                  <span style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 15, color: COLORS.gold }}>
+                    {wc.count}
+                  </span>
+                </Card>
+              ),
+            }))}
+          />
+        </div>
+      ) : (
+        <Card style={{ marginBottom: 16 }}>
+          <div style={{ color: COLORS.muted, fontSize: 13 }}>No waiver activity that season.</div>
+        </Card>
+      )}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 14 }}>
+        {pageMoves.map((t) => {
+          const rid = (t.roster_ids || [])[0];
+          const owner = usersById[rostersById[rid]?.owner_id];
+          const adds = Object.keys(t.adds || {});
+          const drops = Object.keys(t.drops || {});
+          const faab = t.type === "waiver" ? t.settings?.waiver_bid : null;
+          const weekLabel = !t._round ? "Preseason" : `Week ${t._round}`;
+          const date = formatDate(t.created);
+          return (
+            <Card key={`${t.season}-${t.transaction_id}`}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8, flexWrap: "wrap", gap: 6 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <Crest name={teamName(owner)} logo={avatarUrl(owner)} size={22} />
+                  <span style={{ fontWeight: 600, fontSize: 13 }}>{withOwner(owner)}</span>
+                  <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: COLORS.turfLight }}>
+                    {t.type === "waiver" ? "WAIVER" : "FREE AGENT"} · {t.season} · {weekLabel}
+                  </span>
+                </div>
+                {date && (
+                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: COLORS.muted }}>{date}</div>
+                )}
+              </div>
+              <div style={{ fontSize: 13, color: COLORS.muted }}>
+                {adds.map((pid) => (
+                  <div key={pid}>
+                    + {playerLabel(pid)}
+                    {faab !== null && faab !== undefined && (
+                      <span style={{ color: COLORS.gold, marginLeft: 6 }}>(${faab} FAAB)</span>
+                    )}
+                  </div>
+                ))}
+                {drops.map((pid) => (
+                  <div key={pid} style={{ color: COLORS.leatherDeep }}>- {playerLabel(pid)}</div>
+                ))}
+                {adds.length === 0 && drops.length === 0 && <div>-</div>}
+              </div>
+            </Card>
+          );
+        })}
+      </div>
+      {totalPages > 1 && (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12 }}>
+          <button
+            onClick={() => setPage((p) => Math.max(0, p - 1))}
+            disabled={page === 0}
+            style={{
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 12,
+              padding: "7px 14px",
+              borderRadius: 6,
+              border: `1px solid ${COLORS.hairline}`,
+              background: "transparent",
+              color: page === 0 ? COLORS.hairline : COLORS.turf,
+              cursor: page === 0 ? "default" : "pointer",
+            }}
+          >
+            Previous
+          </button>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: COLORS.muted }}>
+            Page {page + 1} of {totalPages}
+          </span>
+          <button
+            onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+            disabled={page >= totalPages - 1}
+            style={{
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 12,
+              padding: "7px 14px",
+              borderRadius: 6,
+              border: `1px solid ${COLORS.hairline}`,
+              background: "transparent",
+              color: page >= totalPages - 1 ? COLORS.hairline : COLORS.turf,
+              cursor: page >= totalPages - 1 ? "default" : "pointer",
+            }}
+          >
+            Next
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function computeSeasonPlayerTotals(weekMatchups) {
+  const totals = {};
+  Object.values(weekMatchups || {}).forEach((matchups) => {
+    (matchups || []).forEach((m) => {
+      Object.entries(m.players_points || {}).forEach(([pid, pts]) => {
+        totals[pid] = (totals[pid] || 0) + (pts || 0);
+      });
+    });
+  });
+  return totals;
+}
+
+// Compares each pick's draft position against how that player actually
+// scored that season, in rank terms rather than raw points (so it isn't
+// skewed by RBs/WRs naturally outscoring K/DEF). delta = pickNo minus
+// points-rank: a big positive delta means picked late, finished high
+// (a steal); a big negative delta means picked early, finished low (a bust).
+function computeDraftValue(picks, seasonPlayerTotals) {
+  const withPts = (picks || []).filter((p) => p.playerId).map((p) => ({ ...p, points: seasonPlayerTotals[p.playerId] || 0 }));
+  if (withPts.length === 0) return { steal: null, bust: null };
+  const byPoints = [...withPts].sort((a, b) => b.points - a.points);
+  const pointsRank = {};
+  byPoints.forEach((p, i) => { pointsRank[p.playerId] = i + 1; });
+  const withDelta = withPts.map((p) => ({ ...p, delta: p.pickNo - pointsRank[p.playerId] }));
+  const steal = withDelta.reduce((best, p) => (!best || p.delta > best.delta ? p : best), null);
+  const bust = withDelta.reduce((worst, p) => (!worst || p.delta < worst.delta ? p : worst), null);
+  return { steal, bust };
+}
+
+function DraftPicksTab({ rosters, usersById, tradedPicks, draftRounds, currentSeason, currentDraftPicks, seasonHistory, players, weekMatchups }) {
   const [mode, setMode] = useState("byTeam");
   const [historySeasonIdx, setHistorySeasonIdx] = useState(0);
 
@@ -2998,15 +4502,26 @@ function DraftPicksTab({ rosters, usersById, tradedPicks, draftRounds, currentSe
   const pastDrafts = useMemo(() => {
     const entries = [];
     if (currentDraftPicks && currentDraftPicks.length > 0) {
-      entries.push({ season: currentSeason, picks: currentDraftPicks });
+      entries.push({ season: currentSeason, picks: currentDraftPicks, weekMatchups });
     }
     (seasonHistory || []).forEach((s) => {
       if (s.draftPicks && s.draftPicks.length > 0) {
-        entries.push({ season: s.season, picks: s.draftPicks });
+        entries.push({ season: s.season, picks: s.draftPicks, weekMatchups: s.weekMatchups || {} });
       }
     });
     return entries.sort((a, b) => Number(b.season) - Number(a.season));
-  }, [currentDraftPicks, currentSeason, seasonHistory]);
+  }, [currentDraftPicks, currentSeason, seasonHistory, weekMatchups]);
+
+  const selectedDraft = pastDrafts[historySeasonIdx];
+  const draftValue = useMemo(() => {
+    if (!selectedDraft) return { steal: null, bust: null };
+    const value = computeDraftValue(selectedDraft.picks, computeSeasonPlayerTotals(selectedDraft.weekMatchups));
+    // 2025 was the league's first season getting everything set up, and the
+    // steal read for that draft doesn't hold up, so skip that call-out for
+    // just this one season.
+    if (selectedDraft.season === "2025") return { ...value, steal: null };
+    return value;
+  }, [selectedDraft]);
 
   const byTeam = useMemo(() => {
     const groups = {};
@@ -3160,6 +4675,38 @@ function DraftPicksTab({ rosters, usersById, tradedPicks, draftRounds, currentSe
                   </button>
                 ))}
               </div>
+
+              {(draftValue.steal || draftValue.bust) && (
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 10, marginBottom: 14 }}>
+                  {draftValue.steal && draftValue.steal.delta > 0 && (
+                    <Card style={{ borderLeft: `3px solid ${COLORS.turf}` }}>
+                      <div style={{ fontSize: 10, color: COLORS.muted, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>
+                        Steal of the Draft
+                      </div>
+                      <div style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 16, color: COLORS.turf, marginBottom: 2 }}>
+                        {playerLabel(draftValue.steal.playerId)}
+                      </div>
+                      <div style={{ fontSize: 12, color: COLORS.bone }}>
+                        Pick {draftValue.steal.pickNo} (Rd {draftValue.steal.round}), {fmt(draftValue.steal.points)} pts that season — {withOwner(draftValue.steal.owner)}
+                      </div>
+                    </Card>
+                  )}
+                  {draftValue.bust && draftValue.bust.delta < 0 && (
+                    <Card style={{ borderLeft: `3px solid ${COLORS.leatherDeep}` }}>
+                      <div style={{ fontSize: 10, color: COLORS.muted, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>
+                        Bust of the Draft
+                      </div>
+                      <div style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 16, color: COLORS.turf, marginBottom: 2 }}>
+                        {playerLabel(draftValue.bust.playerId)}
+                      </div>
+                      <div style={{ fontSize: 12, color: COLORS.bone }}>
+                        Pick {draftValue.bust.pickNo} (Rd {draftValue.bust.round}), only {fmt(draftValue.bust.points)} pts that season — {withOwner(draftValue.bust.owner)}
+                      </div>
+                    </Card>
+                  )}
+                </div>
+              )}
+
               <Card style={{ padding: 0, overflow: "hidden" }}>
                 <div style={{ overflowX: "auto" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -3184,7 +4731,7 @@ function DraftPicksTab({ rosters, usersById, tradedPicks, draftRounds, currentSe
                     </tr>
                   </thead>
                   <tbody>
-                    {(pastDrafts[historySeasonIdx]?.picks || []).map((p, i) => (
+                    {(selectedDraft?.picks || []).map((p, i) => (
                       <tr key={`${p.round}-${p.pickNo}`} style={{ borderTop: i === 0 ? "none" : `1px solid ${COLORS.hairline}` }}>
                         <td style={{ padding: "7px 12px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: COLORS.muted }}>
                           {p.pickNo}
@@ -3213,10 +4760,48 @@ function DraftPicksTab({ rosters, usersById, tradedPicks, draftRounds, currentSe
   );
 }
 
-// Builds a plain-text auto-draft recap for one week, in the site's voice,
-// from real matchup results. Meant to be a starting point the manager edits,
-// not a finished article.
-function buildSeasonHistoryData(summary, players) {
+// Best waiver/free-agent pickup of a season, judged by how many points that
+// player scored while on the roster that added them (ownerPlayerTotals is
+// already ownership-scoped per week, so this naturally only counts the
+// points earned on that specific team).
+function computeSeasonWaiverMVP(summary) {
+  if (!summary.waiverMoves || !summary.rosters) return null;
+  let best = null;
+  summary.waiverMoves.forEach((t) => {
+    Object.entries(t.adds || {}).forEach(([pid, rid]) => {
+      const ownerId = summary.rosters.find((r) => r.roster_id === rid)?.owner_id;
+      if (!ownerId) return;
+      const pts = summary.ownerPlayerTotals?.[ownerId]?.[pid] || 0;
+      if (!best || pts > best.points) best = { playerId: pid, ownerId, points: pts };
+    });
+  });
+  return best;
+}
+
+// Trades plus waiver/free-agent moves combined, one manager's total roster
+// activity for the season.
+function computeSeasonMostActiveManager(summary) {
+  if (!summary.rosters) return null;
+  const counts = {};
+  (summary.trades || []).forEach((t) => {
+    (t.roster_ids || []).forEach((rid) => {
+      const ownerId = summary.rosters.find((r) => r.roster_id === rid)?.owner_id;
+      if (ownerId) counts[ownerId] = (counts[ownerId] || 0) + 1;
+    });
+  });
+  (summary.waiverMoves || []).forEach((t) => {
+    const rid = (t.roster_ids || [])[0];
+    const ownerId = summary.rosters.find((r) => r.roster_id === rid)?.owner_id;
+    if (ownerId) counts[ownerId] = (counts[ownerId] || 0) + 1;
+  });
+  let best = null;
+  Object.entries(counts).forEach(([ownerId, count]) => {
+    if (!best || count > best.count) best = { ownerId, count };
+  });
+  return best;
+}
+
+function buildSeasonHistoryData(summary, players, ownerDirectory) {
   function playerLabelFor(pid) {
     const p = players?.[pid];
     if (!p) return pid;
@@ -3251,6 +4836,16 @@ function buildSeasonHistoryData(summary, players) {
       leagueSummaryRows.push(["Best individual performance", val]);
     }
 
+    const waiverMVP = computeSeasonWaiverMVP(summary);
+    if (waiverMVP && waiverMVP.points > 0) {
+      leagueSummaryRows.push(["Waiver wire MVP", `${playerLabelFor(waiverMVP.playerId)}, ${fmt(waiverMVP.points)} pts (${withOwner(ownerDirectory?.[waiverMVP.ownerId])})`]);
+    }
+
+    const activeManager = computeSeasonMostActiveManager(summary);
+    if (activeManager && activeManager.count > 0) {
+      leagueSummaryRows.push(["Most active manager", `${withOwner(ownerDirectory?.[activeManager.ownerId])}, ${activeManager.count} move${activeManager.count === 1 ? "" : "s"}`]);
+    }
+
     if (summary.lastPlace) {
       leagueSummaryRows.push(["Wall of shame", withOwner(summary.lastPlace)]);
     }
@@ -3273,6 +4868,144 @@ function buildSeasonHistoryData(summary, players) {
   return { leagueSummaryRows, teamRows };
 }
 
+// Same phrase-bank approach as the weekly Recap, scoped to a whole season.
+// Only ever called for completed seasons - an in-progress season has no
+// champion, no wall of shame, nothing settled enough to narrate yet.
+const SEASON_RECAP_PHRASES = {
+  championWithRunnerUp: [
+    ({ C, R, season }) => `${C} won the whole damn thing in ${season}, taking down ${R} for the title.`,
+    ({ C, R, season }) => `${season} belongs to ${C}, who beat ${R} when it mattered most.`,
+    ({ C, R, season }) => `The trophy went to ${C} in ${season}. ${R} got the runner-up plaque and a long offseason to think about it.`,
+    ({ C, R, season }) => `${C} outlasted the whole league in ${season}, with ${R} left holding the second-place bag.`,
+    ({ C, R, season }) => `Bragging rights for ${season} belong to ${C}. ${R} came close, which somehow makes it worse.`,
+    ({ C, R, season }) => `${C} closed out ${season} as champion, running straight through ${R} to get there.`,
+  ],
+  championSolo: [
+    ({ C, season }) => `${C} took home the ${season} title.`,
+    ({ C, season }) => `${season}'s champion: ${C}. Somebody go update the banner.`,
+    ({ C, season }) => `${C} is the name on the ${season} trophy.`,
+  ],
+  pointsLeaderSameAsChamp: [
+    ({ PL, pts, season }) => `And they didn't just win the title, ${PL} led the league in scoring too, ${pts} points. An absolute clean sweep.`,
+    ({ PL, pts, season }) => `${PL} backed up the trophy with the league's best scoring output, ${pts} points on the year. No arguments there.`,
+    ({ PL, pts, season }) => `${PL} was the best team on paper and on the scoreboard in ${season}, finishing with ${pts} points and the title to match.`,
+  ],
+  pointsLeaderDifferent: [
+    ({ PL, pts, season }) => `Meanwhile ${PL} put up the most points in the league (${pts}) and still didn't walk away with the trophy. Fantasy football doesn't give a shit about your points total in November.`,
+    ({ PL, pts, season }) => `The scoring title went to ${PL} with ${pts} points, proof that the best team on paper doesn't always win the bracket.`,
+    ({ PL, pts, season }) => `${PL} scored more than anyone else all season, ${pts} points, and still has to watch someone else hold the trophy. Brutal.`,
+    ({ PL, pts, season }) => `${PL} led the league in points (${pts}) and has nothing but a good fpts column to show for it.`,
+  ],
+  highGame: [
+    ({ HG, pts, week }) => `The single best week of the season belonged to ${HG}, who dropped ${pts} points in Week ${week}.`,
+    ({ HG, pts, week }) => `Nobody topped ${HG}'s Week ${week} outburst all year: ${pts} points in one week.`,
+    ({ HG, pts, week }) => `${HG} put up the highest single-week score of the season in Week ${week}, ${pts} points.`,
+  ],
+  bestPlayerGame: [
+    ({ P, T, pts, week }) => `And the best individual performance of the season came from ${P}, who went off for ${pts} points in Week ${week}${T ? ` for ${T}` : ""}.`,
+    ({ P, T, pts, week }) => `${P} turned in the single best fantasy performance of the season: ${pts} points in Week ${week}${T ? `, playing for ${T}` : ""}.`,
+    ({ P, T, pts, week }) => `Nobody had a better single game all season than ${P}'s ${pts}-point Week ${week}${T ? ` for ${T}` : ""}.`,
+  ],
+  waiverMVP: [
+    ({ P, T, pts }) => `${T} found a genuine difference-maker on waivers this season: ${P} put up ${pts} points after getting picked up.`,
+    ({ P, T, pts }) => `The best waiver pickup of the season belongs to ${T}, who scooped up ${P} for ${pts} points worth of production.`,
+    ({ P, T, pts }) => `Somebody actually read the waiver wire correctly this year. ${T} added ${P} and got ${pts} points out of the move.`,
+    ({ P, T, pts }) => `${P} was sitting on the waiver wire and ${T} was the one who noticed, cashing in for ${pts} points.`,
+  ],
+  mostActiveManager: [
+    ({ T, count }) => `${T} couldn't leave the roster alone, making ${count} trades and waiver moves combined, more than anyone else in the league.`,
+    ({ T, count }) => `${T} led the league in roster moves this season with ${count} trades and waiver claims combined. Never a dull moment.`,
+    ({ T, count }) => `Nobody touched their roster more than ${T}, who racked up ${count} trades and waiver moves this season.`,
+    ({ T, count }) => `${T} treated the transaction log like a part-time job, ${count} moves between trades and waivers this season alone.`,
+  ],
+  lastPlace: [
+    ({ LP, season }) => `As for the bottom of the barrel, ${LP} finished dead last in ${season} and earned a permanent spot on the wall of shame.`,
+    ({ LP, season }) => `Somebody had to be the basement dweller. That honor went to ${LP}.`,
+    ({ LP, season }) => `${LP} closed out the season in the cellar. There's always next year, allegedly.`,
+    ({ LP, season }) => `The wall of shame added a new name this year: ${LP}.`,
+    ({ LP, season }) => `${LP} owns last place for ${season}, and the group chat did not let this one go quietly.`,
+  ],
+  closer: [
+    ({ season }) => `That's a wrap on ${season}. On to the next one.`,
+    ({ season }) => `${season} is in the books. Time to start overthinking next year's draft.`,
+    ({ season }) => `Another season, another set of receipts. ${season} is officially closed for business.`,
+    ({ season }) => `${season}'s story has been told. See everyone at next year's draft.`,
+  ],
+};
+
+function buildSeasonRecapNarrative(summary, players, ownerDirectory) {
+  if (!summary || !summary.isComplete) return [];
+  const season = summary.season;
+  const paragraphs = [];
+
+  function playerLabelFor(pid) {
+    const p = players?.[pid];
+    if (!p) return pid;
+    const name = `${p.first_name || ""} ${p.last_name || ""}`.trim() || pid;
+    return p.position ? `${name} (${p.position})` : name;
+  }
+
+  // Paragraph 1: the crown itself, plus the scoring title, joined together.
+  const titleSentences = [];
+  if (summary.champion) {
+    const C = withOwner(summary.champion);
+    if (summary.runnerUp) {
+      const ctx = { C, R: withOwner(summary.runnerUp), season };
+      titleSentences.push(pick(SEASON_RECAP_PHRASES.championWithRunnerUp, hashSeed(season, "champion", C, ctx.R))(ctx));
+    } else {
+      const ctx = { C, season };
+      titleSentences.push(pick(SEASON_RECAP_PHRASES.championSolo, hashSeed(season, "championSolo", C))(ctx));
+    }
+  }
+
+  if (summary.standings.length > 0) {
+    const topScorer = [...summary.standings].sort((a, b) => b.fpts - a.fpts)[0];
+    const sameAsChamp = summary.champion && topScorer.ownerId === summary.champion.user_id;
+    const ctx = { PL: topScorer.displayName, pts: fmt(topScorer.fpts), season };
+    const bank = sameAsChamp ? SEASON_RECAP_PHRASES.pointsLeaderSameAsChamp : SEASON_RECAP_PHRASES.pointsLeaderDifferent;
+    titleSentences.push(pick(bank, hashSeed(season, "pointsLeader", ctx.PL))(ctx));
+  }
+  if (titleSentences.length > 0) paragraphs.push(titleSentences.join(" "));
+
+  // Paragraph 2: the season's highlight-reel stats and the wall of shame.
+  const highlightSentences = [];
+  if (summary.highGame) {
+    const ctx = { HG: withOwner(summary.highGame.owner), pts: fmt(summary.highGame.points), week: summary.highGame.week, season };
+    highlightSentences.push(pick(SEASON_RECAP_PHRASES.highGame, hashSeed(season, "highGame", ctx.HG))(ctx));
+  }
+  if (summary.bestPlayerGame) {
+    const ctx = {
+      P: playerLabelFor(summary.bestPlayerGame.playerId),
+      T: summary.bestPlayerGame.owner ? withOwner(summary.bestPlayerGame.owner) : null,
+      pts: fmt(summary.bestPlayerGame.points),
+      week: summary.bestPlayerGame.week,
+      season,
+    };
+    highlightSentences.push(pick(SEASON_RECAP_PHRASES.bestPlayerGame, hashSeed(season, "bestPlayerGame", ctx.P))(ctx));
+  }
+  const waiverMVP = computeSeasonWaiverMVP(summary);
+  if (waiverMVP && waiverMVP.points > 0) {
+    const ctx = { P: playerLabelFor(waiverMVP.playerId), T: withOwner(ownerDirectory?.[waiverMVP.ownerId]), pts: fmt(waiverMVP.points) };
+    highlightSentences.push(pick(SEASON_RECAP_PHRASES.waiverMVP, hashSeed(season, "waiverMVP", ctx.P))(ctx));
+  }
+  const activeManager = computeSeasonMostActiveManager(summary);
+  if (activeManager && activeManager.count > 0) {
+    const ctx = { T: withOwner(ownerDirectory?.[activeManager.ownerId]), count: activeManager.count };
+    highlightSentences.push(pick(SEASON_RECAP_PHRASES.mostActiveManager, hashSeed(season, "mostActiveManager", ctx.T))(ctx));
+  }
+  if (summary.lastPlace) {
+    const ctx = { LP: withOwner(summary.lastPlace), season };
+    highlightSentences.push(pick(SEASON_RECAP_PHRASES.lastPlace, hashSeed(season, "lastPlace", ctx.LP))(ctx));
+  }
+  if (highlightSentences.length > 0) paragraphs.push(highlightSentences.join(" "));
+
+  if (paragraphs.length > 0) {
+    paragraphs.push(pick(SEASON_RECAP_PHRASES.closer, hashSeed(season, "closer"))({ season }));
+  }
+
+  return paragraphs;
+}
+
 function HistoryTab({ rostersById, usersById, standings, seasonHistory, superlatives, players, currentSeason }) {
   // One summary per season, current one included.
   const seasonSummaries = useMemo(() => {
@@ -3286,6 +5019,10 @@ function HistoryTab({ rostersById, usersById, standings, seasonHistory, superlat
       standings: s.standings || [],
       highGame: s.highGame,
       bestPlayerGame: s.bestPlayerGame,
+      trades: s.trades || [],
+      waiverMoves: s.waiverMoves || [],
+      rosters: s.rosters || [],
+      ownerPlayerTotals: s.ownerPlayerTotals || {},
     }));
     const currentTopWeek = superlatives?.currentSeasonSuper?.topWeek;
     const currentHighGame = currentTopWeek
@@ -3305,9 +5042,19 @@ function HistoryTab({ rostersById, usersById, standings, seasonHistory, superlat
     return [current, ...historical].sort((a, b) => Number(b.season) - Number(a.season));
   }, [seasonHistory, currentSeason, standings, superlatives, rostersById, usersById]);
 
+  const ownerDirectory = useMemo(() => {
+    const map = {};
+    [...(seasonHistory || [])].sort((a, b) => Number(a.season) - Number(b.season)).forEach((s) => {
+      (s.users || []).forEach((u) => { map[u.user_id] = u; });
+    });
+    Object.values(usersById).forEach((u) => { map[u.user_id] = u; });
+    return map;
+  }, [seasonHistory, usersById]);
+
   const [selectedSeasonIdx, setSelectedSeasonIdx] = useState(0);
   const selectedSummary = seasonSummaries[selectedSeasonIdx];
-  const historyData = selectedSummary ? buildSeasonHistoryData(selectedSummary, players) : null;
+  const historyData = selectedSummary ? buildSeasonHistoryData(selectedSummary, players, ownerDirectory) : null;
+  const seasonNarrative = selectedSummary ? buildSeasonRecapNarrative(selectedSummary, players, ownerDirectory) : [];
 
   if (seasonSummaries.every((s) => s.standings.length === 0)) {
     return (
@@ -3351,6 +5098,28 @@ function HistoryTab({ rostersById, usersById, standings, seasonHistory, superlat
       <div style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 16, color: COLORS.turf, marginBottom: 10 }}>
         Season {selectedSummary?.season}
       </div>
+
+      {seasonNarrative.length > 0 && (
+        <Card style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 11, color: COLORS.turfLight, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 6 }}>
+            The Recap
+          </div>
+          {seasonNarrative.map((p, i) => (
+            <div
+              key={i}
+              style={{
+                color: COLORS.bone,
+                fontSize: 14,
+                lineHeight: 1.6,
+                marginTop: i === 0 ? 0 : 10,
+                fontWeight: i === 0 ? 600 : 400,
+              }}
+            >
+              {p}
+            </div>
+          ))}
+        </Card>
+      )}
 
       {historyData && (
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
