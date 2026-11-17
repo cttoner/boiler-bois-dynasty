@@ -218,6 +218,8 @@ textarea:hover, textarea:focus { border-color: #0E4D33; outline: none; }
   .rules-glance > div:nth-child(n+4) { display: none; }
   .rules-glance > div > div:last-child { font-size: 14px !important; white-space: nowrap; }
   .rules-scoring { grid-template-columns: minmax(0, 1fr) !important; gap: 4px !important; }
+  .this-week { grid-template-columns: minmax(0, 1fr) !important; }
+  .this-week-games { grid-template-columns: minmax(0, 1fr) !important; }
   .site-nav { display: none !important; }
   .rail-strip { margin-bottom: 8px; }
   body { padding-bottom: calc(68px + env(safe-area-inset-bottom)); }
@@ -803,6 +805,35 @@ function useLeagueData(leagueId) {
     };
   }, [leagueId]);
 
+  // Live scores: while games could be on (Thu/Sat/Sun/Mon, 9am to 1am
+  // Eastern) and the page is open, pull this week's matchups every minute.
+  useEffect(() => {
+    if (state.loading || !(state.seasonType === "regular" || state.seasonType === "post")) return;
+    const inGameWindow = () => {
+      const et = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
+      const day = et.getDay(), hr = et.getHours();
+      const gameDay = [4, 6, 0, 1].includes(day) && hr >= 9;
+      const lateNight = [5, 0, 1, 2].includes(day) && hr < 1; // games running past midnight
+      return gameDay || lateNight;
+    };
+    let stopped = false;
+    const tick = async () => {
+      if (stopped || document.hidden || !inGameWindow()) return;
+      try {
+        const res = await fetch(`${API}/league/${leagueId}/matchups/${state.week}`);
+        if (!res.ok) return;
+        const fresh = await res.json();
+        if (!stopped && Array.isArray(fresh)) {
+          setState((prev) => ({ ...prev, matchups: fresh, liveUpdatedAt: Date.now() }));
+        }
+      } catch (e) {}
+    };
+    const id = setInterval(tick, 60000);
+    const onVisible = () => { if (!document.hidden) tick(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { stopped = true; clearInterval(id); document.removeEventListener("visibilitychange", onVisible); };
+  }, [state.loading, state.seasonType, state.week, leagueId]);
+
   return state;
 }
 
@@ -1312,16 +1343,49 @@ function computeStandingsThroughWeek(weekMatchups, throughWeek, rosters, users) 
     .sort((a, b) => b.winPct - a.winPct || b.fpts - a.fpts);
 }
 
-function computePowerRankings(standings) {
+// Power score (out of 100):
+//   50% all-play record: share of teams you'd have beaten each week if
+//       everyone played everyone (true strength, schedule luck removed)
+//   25% actual win %
+//   25% recent form: last 3 weeks' average score vs the league's best
+// Regular-season weeks only, through `throughWeek`.
+const POWER_FORMULA_TEXT = "50% all-play record (how many teams you'd beat each week if everyone played everyone), 25% actual record, 25% last-3-weeks scoring.";
+function computePowerRankings(standings, weekMatchups, throughWeek, playoffStart = 15) {
   if (standings.length === 0) return [];
-  const maxFpts = Math.max(...standings.map((s) => s.fpts), 1);
-  const scored = standings.map((s) => {
-    const winScore = s.winPct * 70;
-    const ptsScore = (s.fpts / maxFpts) * 30;
-    return { ...s, power: winScore + ptsScore };
+  const weeks = Object.keys(weekMatchups || {})
+    .map(Number)
+    .filter((w) => w <= (throughWeek ?? 99) && w < playoffStart && (weekMatchups[w] || []).some((m) => (m.points ?? 0) > 0))
+    .sort((a, b) => a - b);
+  if (weeks.length === 0) {
+    const maxFpts = Math.max(...standings.map((s) => s.fpts), 1);
+    return standings
+      .map((s) => ({ ...s, power: s.winPct * 70 + (s.fpts / maxFpts) * 30 }))
+      .sort((a, b) => b.power - a.power);
+  }
+  const allPlay = {}, scores = {};
+  weeks.forEach((w) => {
+    const ms = (weekMatchups[w] || []).filter((m) => m.matchup_id != null);
+    const n = ms.length;
+    ms.forEach((m) => {
+      const pts = m.points ?? 0;
+      const beat = ms.filter((o) => o.roster_id !== m.roster_id && pts > (o.points ?? 0)).length;
+      allPlay[m.roster_id] = (allPlay[m.roster_id] || 0) + (n > 1 ? beat / (n - 1) : 0);
+      (scores[m.roster_id] = scores[m.roster_id] || []).push(pts);
+    });
   });
-  scored.sort((a, b) => b.power - a.power);
-  return scored;
+  const recent = {};
+  Object.entries(scores).forEach(([rid, arr]) => {
+    const last = arr.slice(-3);
+    recent[rid] = last.reduce((a, b) => a + b, 0) / Math.max(1, last.length);
+  });
+  const maxRecent = Math.max(...Object.values(recent), 1);
+  return standings
+    .map((s) => {
+      const allPlayPct = (allPlay[s.rosterId] || 0) / weeks.length;
+      const form = (recent[s.rosterId] || 0) / maxRecent;
+      return { ...s, allPlayPct, recentAvg: recent[s.rosterId] || 0, power: allPlayPct * 50 + s.winPct * 25 + form * 25 };
+    })
+    .sort((a, b) => b.power - a.power || b.fpts - a.fpts);
 }
 
 const TABS = [
@@ -1354,7 +1418,10 @@ function App() {
     () => computeStandings(data.rosters, data.users),
     [data.rosters, data.users]
   );
-  const power = useMemo(() => computePowerRankings(standings), [standings]);
+  const power = useMemo(
+    () => computePowerRankings(standings, data.weekMatchups, (data.week || 1) - 1, data.league?.settings?.playoff_week_start || 15),
+    [standings, data.weekMatchups, data.week, data.league]
+  );
   const leagueSuper = useLeagueSuperlatives(data, standings, usersById);
 
   useEffect(() => {
@@ -1550,6 +1617,7 @@ function App() {
               usersById={usersById}
               week={data.week}
               seasonType={data.seasonType}
+              liveUpdatedAt={data.liveUpdatedAt}
             />
           </>
         )}
@@ -2282,7 +2350,7 @@ function StandingsTab({ standings, playoffTeams, data, usersById }) {
   );
 }
 
-function MatchupsTab({ matchups, rostersById, usersById, week, seasonType }) {
+function MatchupsTab({ matchups, rostersById, usersById, week, seasonType, liveUpdatedAt }) {
   const grouped = useMemo(() => {
     const byMatchupId = {};
     matchups.forEach((m) => {
@@ -2333,6 +2401,12 @@ function MatchupsTab({ matchups, rostersById, usersById, week, seasonType }) {
       <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
         Head to head, winner takes the bragging rights and the loser takes the group chat abuse. That's the deal.
       </div>
+      {liveUpdatedAt && !notStarted && (
+        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: COLORS.turf, marginBottom: 8 }}>
+          <span style={{ display: "inline-block", width: 7, height: 7, borderRadius: "50%", background: COLORS.pylon, marginRight: 6 }} />
+          Live · updated {new Date(liveUpdatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+        </div>
+      )}
       {notStarted && (
         <div style={{ fontSize: 13, color: COLORS.leatherDeep, background: COLORS.leatherTint, borderLeft: `3px solid ${COLORS.leather}`, padding: "8px 12px", borderRadius: 6, marginBottom: 10 }}>
           No points on the board yet. Records shown until kickoff.
@@ -2961,6 +3035,109 @@ function SeasonDrafts({ season, leagueId, seasonUsers, seasonRosters, data }) {
           );
         })}
       </Card>
+    </div>
+  );
+}
+
+
+// ---- Home: this week at a glance ----
+function ThisWeek({ data, standings, usersById }) {
+  const { league, matchups, rosters, week, seasonType } = data;
+  if (!(seasonType === "regular" || seasonType === "post") || !league) return null;
+  const settings = league.settings || {};
+  const pws = settings.playoff_week_start || 15;
+  const playoffTeams = settings.playoff_teams || 6;
+  const inPlayoffs = week >= pws;
+  const divisionCount = settings.divisions > 1 ? settings.divisions : 0;
+  const rosterById = Object.fromEntries((rosters || []).map((r) => [r.roster_id, r]));
+  const ownerOf = (rid) => usersById[rosterById[rid]?.owner_id];
+  const recordOf = (rid) => {
+    const st = rosterById[rid]?.settings || {};
+    return `${st.wins ?? 0}-${st.losses ?? 0}${st.ties ? `-${st.ties}` : ""}`;
+  };
+
+  const games = groupByMatchupId(matchups || []).filter((p) => p.length === 2);
+  const started = (matchups || []).some((m) => (m.points ?? 0) > 0);
+
+  const seedOf = computeSeeds(standings || [], rosters, divisionCount);
+  const bySeed = (standings || []).map((s) => s.rosterId).sort((a, b) => seedOf[a] - seedOf[b]);
+  const shown = bySeed.slice(0, playoffTeams + 2);
+  const byes = playoffTeams === 6 ? 2 : 0;
+
+  const GameRow = ({ pair }) => {
+    const [a, b] = pair;
+    const pa = a.points ?? 0, pb = b.points ?? 0;
+    const side = (m, pts, other) => {
+      const u = ownerOf(m.roster_id);
+      const leading = started && pts > other;
+      return (
+        <div style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}>
+          <Crest name={teamName(u)} logo={avatarUrl(u)} size={20} />
+          <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: leading ? 700 : 600, color: COLORS.bone, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{teamName(u)}</span>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12.5, fontWeight: leading ? 700 : 400, color: leading ? COLORS.gold : COLORS.muted }}>
+            {started ? fmt(pts) : recordOf(m.roster_id)}
+          </span>
+        </div>
+      );
+    };
+    return (
+      <div style={{ padding: "8px 0", borderTop: `1px solid ${COLORS.hairline}`, display: "flex", flexDirection: "column", gap: 5 }}>
+        {side(a, pa, pb)}
+        {side(b, pb, pa)}
+      </div>
+    );
+  };
+
+  return (
+    <div style={{ marginBottom: 20 }}>
+      <SectionLabel>{inPlayoffs ? `Week ${week} · Playoffs` : `This week · Week ${week}`}</SectionLabel>
+      <div className="this-week" style={{ display: "grid", gridTemplateColumns: inPlayoffs ? "minmax(0, 1fr)" : "minmax(0, 1.4fr) minmax(0, 1fr)", gap: 12 }}>
+        <Card style={{ padding: "4px 14px 6px", borderTop: `3px solid ${COLORS.pylon}` }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", padding: "6px 0" }}>
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10.5, letterSpacing: "0.08em", color: COLORS.muted }}>
+              {started ? "SCORES" : "GAMES · RECORDS SHOWN UNTIL KICKOFF"}
+            </span>
+            {data.liveUpdatedAt && started && (
+              <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10.5, color: COLORS.turf }}>
+                <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: COLORS.pylon, marginRight: 5 }} />LIVE
+              </span>
+            )}
+          </div>
+          <div className="this-week-games" style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", columnGap: 18 }}>
+            {games.map((p, i) => <GameRow key={i} pair={p} />)}
+          </div>
+        </Card>
+        {!inPlayoffs && (
+          <Card style={{ padding: "4px 14px 6px", borderTop: "3px solid #DAAA00" }}>
+            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10.5, letterSpacing: "0.08em", color: COLORS.muted, padding: "6px 0" }}>
+              PLAYOFF LINE · {pws - week} {pws - week === 1 ? "WEEK" : "WEEKS"} LEFT
+            </div>
+            {shown.map((rid, i) => {
+              const u = ownerOf(rid);
+              const seed = seedOf[rid];
+              const inIt = seed <= playoffTeams;
+              return (
+                <React.Fragment key={rid}>
+                  {i === playoffTeams && (
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "4px 0", color: COLORS.pylon, fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, fontWeight: 700 }}>
+                      <div style={{ flex: 1, height: 0, borderTop: `2px dashed ${COLORS.pylon}` }} />CUT LINE<div style={{ flex: 1, height: 0, borderTop: `2px dashed ${COLORS.pylon}` }} />
+                    </div>
+                  )}
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 0", opacity: inIt ? 1 : 0.7 }}>
+                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: COLORS.muted, width: 16, textAlign: "right" }}>{seed}</span>
+                    <Crest name={teamName(u)} logo={avatarUrl(u)} size={20} />
+                    <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600, color: inIt ? COLORS.turf : COLORS.bone, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{teamName(u)}</span>
+                    {byes > 0 && seed <= byes && (
+                      <span style={{ fontSize: 9.5, fontWeight: 700, color: "#FFFFFF", background: COLORS.pylon, borderRadius: 999, padding: "1px 6px" }}>BYE</span>
+                    )}
+                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12.5, color: COLORS.muted }}>{recordOf(rid)}</span>
+                  </div>
+                </React.Fragment>
+              );
+            })}
+          </Card>
+        )}
+      </div>
     </div>
   );
 }
@@ -4238,7 +4415,7 @@ function PowerTab({ power, data }) {
     const priorThroughWeek = lastCompletedWeek - 1;
     if (priorThroughWeek < 1) return {};
     const priorStandings = computeStandingsThroughWeek(data.weekMatchups, priorThroughWeek, data.rosters, data.users);
-    const priorPower = computePowerRankings(priorStandings);
+    const priorPower = computePowerRankings(priorStandings, data.weekMatchups, priorThroughWeek, data.league?.settings?.playoff_week_start || 15);
     const priorRank = {};
     priorPower.forEach((p, i) => { priorRank[p.rosterId] = i + 1; });
     const result = {};
@@ -4285,6 +4462,7 @@ function PowerTab({ power, data }) {
       <SectionLabel>Power Rankings</SectionLabel>
       <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
         Not the standings. Your record can lie, this can't. This is who's actually playing good football right now.
+        <div style={{ marginTop: 4, fontSize: 11 }}>How it's scored: {POWER_FORMULA_TEXT}</div>
       </div>
       <Card style={{ padding: "7px 12px" }}>
         {power.map((p, i) => {
@@ -4382,10 +4560,9 @@ function PowerTab({ power, data }) {
         })}
       </Card>
       <div style={{ marginTop: 10, fontSize: 12, color: COLORS.muted }}>
-        Power score blends win percentage (70%) with points scored (30%). Movement (▲▼) compares to where each team
-        stood before last week's games. Steady/Boom-Bust compares how much a team's weekly score swings around its
-        own average, relative to the rest of the league (needs 3+ completed weeks to show up). Swap in your own
-        weekly commentary once you're ready to add trash talk.
+        Movement (▲▼) compares to where each team stood before last week's games, using the same formula.
+        Steady/Boom-Bust compares how much a team's weekly score swings around its own average, relative to the rest
+        of the league (needs 3+ completed weeks to show up).
       </div>
     </div>
   );
@@ -6942,6 +7119,8 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
 
   return (
     <div>
+      <ThisWeek data={data} standings={standings} usersById={usersById} />
+
       {/* Champions banner strip: rafter banners */}
       {(orderedTitles.length > 0 || showOpenBanner) && (
         <div style={{ marginBottom: 22 }}>
@@ -7074,11 +7253,8 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
         </MobileCollapse>
       </Card>
 
-      {/* League at a glance + Titles, side by side */}
+      {/* Titles + Wall of shame, side by side */}
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
-        <div style={{ flex: "1 1 320px", minWidth: 280 }}>
-          <InfoTable title="League at a glance" rows={glanceRows} />
-        </div>
         <div style={{ flex: "1 1 320px", minWidth: 280 }}>
           <SectionLabel>Titles</SectionLabel>
           {championsByOwner.length === 0 ? (
@@ -7106,7 +7282,9 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
               ))}
             </div>
           )}
-        <div style={{ marginTop: 16 }}>
+        </div>
+        <div style={{ flex: "1 1 320px", minWidth: 280 }}>
+          <div>
           <SectionLabel>Wall of shame (last place by year)</SectionLabel>
           {wallOfShame.length === 0 ? (
             <Card>
@@ -7481,8 +7659,7 @@ const LEAGUE_BYLAWS = {
   duesDue: "Paid before the season starts",
   firstPickPunishment: {
     rule: "The 1.01 rookie pick comes with a price: whoever lands it has to complete the league punishment before it's theirs.",
-    history: [{ season: "2025", what: "Hot chip challenge" }],
-    current: "Hot chip challenge",
+    punishment: "Hot chip challenge",
   },
 };
 
@@ -7692,8 +7869,7 @@ function RulesTab({ league, data, standings }) {
             <RuleRows rows={[
               ["Format", `${draftRounds || 3} rounds, linear`],
               ["The 1.01 pick", "Punishment first", LEAGUE_BYLAWS.firstPickPunishment.rule],
-              ...LEAGUE_BYLAWS.firstPickPunishment.history.map((h) => [`${h.season} punishment`, h.what]),
-              [`${league?.season || "This year"}'s punishment`, LEAGUE_BYLAWS.firstPickPunishment.current],
+              ["The punishment", LEAGUE_BYLAWS.firstPickPunishment.punishment],
             ]} />
           </RuleSection>
         </div>
