@@ -83,12 +83,12 @@ textarea:hover, textarea:focus { border-color: #1C1C1C; outline: none; }
   animation-delay: -2.2s;
 }
 .site-nav { scrollbar-width: none; }
-.rail-strip { position: relative; height: 34px; margin-top: 6px; overflow: hidden; }
+.rail-strip { position: relative; height: 46px; margin-top: 4px; overflow: hidden; }
 .rail-line { position: absolute; left: 0; right: 0; bottom: 3px; height: 4px;
   border-top: 2px solid #CFB991;
   background: repeating-linear-gradient(90deg, rgba(207,185,145,0.55) 0 3px, transparent 3px 14px); }
-.train-run { position: absolute; bottom: 6px; left: calc(100% - 128px); animation: trainRoll 5.2s cubic-bezier(.33,.0,.2,1) 0.5s both; }
-@keyframes trainRoll { from { left: -150px; } to { left: calc(100% - 128px); } }
+.train-run { position: absolute; bottom: 6px; left: calc(100% - 166px); animation: trainRoll 5.2s cubic-bezier(.33,.0,.2,1) 0.5s both; }
+@keyframes trainRoll { from { left: -190px; } to { left: calc(100% - 166px); } }
 .train-wheel { transform-box: fill-box; transform-origin: center; animation: wheelSpin 0.65s linear 8 0.5s; }
 @keyframes wheelSpin { to { transform: rotate(360deg); } }
 .train-puff { transform-box: fill-box; transform-origin: center; animation: puff 1.6s ease-out infinite; opacity: 0; }
@@ -114,7 +114,7 @@ textarea:hover, textarea:focus { border-color: #1C1C1C; outline: none; }
   .sortable-table .col-team { position: sticky; left: 0; z-index: 1; background: #FFFFFF; white-space: nowrap; box-shadow: 1px 0 0 rgba(0,0,0,0.14); }
   .sortable-table thead .col-team { background: #F2F0EB; }
   .home-super-grid { grid-template-columns: 1fr; }
-  .rail-strip { height: 28px; }
+  .rail-strip { height: 32px; }
   .train-run svg { width: 92px; height: auto; }
   .train-run { left: calc(100% - 100px); }
   @keyframes trainRoll { from { left: -120px; } to { left: calc(100% - 100px); } }
@@ -134,7 +134,7 @@ function TrainSvg() {
     </g>
   );
   return (
-    <svg width="118" height="30" viewBox="0 0 118 30" role="img" aria-label="Train">
+    <svg width="156" height="40" viewBox="0 0 118 30" role="img" aria-label="Train">
       <circle className="train-puff" cx="86" cy="6" r="3" fill="rgba(255,255,255,0.7)" />
       <circle className="train-puff p2" cx="86" cy="6" r="3" fill="rgba(255,255,255,0.7)" />
       <circle className="train-puff p3" cx="86" cy="6" r="3" fill="rgba(255,255,255,0.7)" />
@@ -1558,14 +1558,13 @@ function SortableTable({ columns, rows, rowKey, defaultSortKey, defaultSortDir =
 }
 
 function heatColor(pct) {
-  // Lerp between a rust/loss anchor and the turf/win anchor.
-  const lossRGB = [193, 73, 10];
-  const winRGB = [142, 111, 62];
+  // Winning matchups shade gold, losing ones shade gray, and an even
+  // record stays close to neutral. The further from .500, the stronger.
   const p = Math.max(0, Math.min(1, pct));
-  const r = Math.round(lossRGB[0] + (winRGB[0] - lossRGB[0]) * p);
-  const g = Math.round(lossRGB[1] + (winRGB[1] - lossRGB[1]) * p);
-  const b = Math.round(lossRGB[2] + (winRGB[2] - lossRGB[2]) * p);
-  return { bg: `rgba(${r},${g},${b},0.22)`, solid: `rgb(${r},${g},${b})` };
+  const strength = Math.abs(p - 0.5) * 2; // 0 at .500, 1 at 1.000 or .000
+  const rgb = p >= 0.5 ? [218, 170, 0] : [111, 114, 123];
+  const alpha = 0.08 + 0.42 * strength;
+  return { bg: `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${alpha.toFixed(2)})`, solid: p >= 0.5 ? "#6B5200" : "#3F4249" };
 }
 
 function shortLabel(u) {
@@ -1921,8 +1920,8 @@ function StandingsTab({ standings, playoffTeams, data, usersById }) {
 
           <SectionLabel>Head-to-head</SectionLabel>
           <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
-            Each cell is the row manager's all-time record against the column manager. Greener means they own that
-            matchup and know it. Rustier means it might be time to quietly retire that rivalry.
+            Each cell is the row manager's all-time record against the column manager. Gold means they own that
+            matchup and know it. Gray means it might be time to quietly retire that rivalry.
           </div>
           <Card style={{ padding: 8, overflowX: "auto" }}>
             <table style={{ borderCollapse: "collapse" }}>
