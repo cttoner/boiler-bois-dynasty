@@ -2061,6 +2061,9 @@ function PlayoffOdds({ data }) {
   const playoffStart = settings.playoff_week_start || 15;
   const playoffTeams = settings.playoff_teams || 6;
   const byes = playoffTeams === 6 ? 2 : 0;
+  // With divisions on, Sleeper seeds the division winners first (verified
+  // against the 2025 bracket: 9-5 division winner got a bye over a 10-4 team).
+  const divisionCount = settings.divisions > 1 ? settings.divisions : 0;
   const remainingWeeks = useMemo(() => {
     const out = [];
     for (let w = week; w < playoffStart; w++) out.push(w);
@@ -2132,7 +2135,8 @@ function PlayoffOdds({ data }) {
       pf: (r.settings?.fpts ?? 0) + (r.settings?.fpts_decimal ?? 0) / 100,
     }));
     const tally = {};
-    base.forEach((t) => { tally[t.id] = { playoff: 0, bye: 0, first: 0, last: 0, wins: 0 }; });
+    base.forEach((t) => { tally[t.id] = { playoff: 0, bye: 0, first: 0, last: 0, wins: 0, div: 0 }; });
+    const divOf = rosters.map((r) => (divisionCount ? r.settings?.division ?? null : null));
 
     const idx = Object.fromEntries(base.map((t, i) => [t.id, i]));
     const wins = new Float64Array(base.length);
@@ -2150,13 +2154,24 @@ function PlayoffOdds({ data }) {
         if (sa > sb) wins[ia] += 1; else if (sb > sa) wins[ib] += 1; else { wins[ia] += 0.5; wins[ib] += 0.5; }
       }
       order.sort((x, y) => wins[y] - wins[x] || pf[y] - pf[x]);
-      order.forEach((ti, rank) => {
+      let seeds = order;
+      if (divisionCount) {
+        const seen = new Set();
+        const winners = [];
+        order.forEach((ti) => {
+          const d = divOf[ti];
+          if (d != null && !seen.has(d)) { seen.add(d); winners.push(ti); }
+        });
+        seeds = [...winners, ...order.filter((ti) => !winners.includes(ti))];
+        winners.forEach((ti) => { tally[base[ti].id].div++; });
+      }
+      seeds.forEach((ti, rank) => {
         const t = tally[base[ti].id];
         t.wins += wins[ti];
         if (rank < playoffTeams) t.playoff++;
         if (rank < byes) t.bye++;
         if (rank === 0) t.first++;
-        if (rank === order.length - 1) t.last++;
+        if (ti === order[order.length - 1]) t.last++;
       });
     }
 
@@ -2174,12 +2189,14 @@ function PlayoffOdds({ data }) {
           playoff: t.playoff / SIM_RUNS,
           bye: t.bye / SIM_RUNS,
           first: t.first / SIM_RUNS,
+          divTitle: t.div / SIM_RUNS,
+          division: r.settings?.division,
           last: t.last / SIM_RUNS,
           proj: model[r.roster_id].mean,
         };
       })
       .sort((a, b) => b.playoff - a.playoff || b.bye - a.bye || b.projWins - a.projWins);
-  }, [schedule, rosters, users, weekMatchups, week, playoffTeams, byes]);
+  }, [schedule, rosters, users, weekMatchups, week, playoffTeams, byes, divisionCount]);
 
   if (seasonType !== "regular" || remainingWeeks.length === 0) return null;
 
@@ -2204,7 +2221,10 @@ function PlayoffOdds({ data }) {
       <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
         {weeksLeft} {weeksLeft === 1 ? "week" : "weeks"} left (Weeks {remainingWeeks[0]}{weeksLeft > 1 ? `-${remainingWeeks[weeksLeft - 1]}` : ""}) and{" "}
         {SIM_RUNS.toLocaleString()} simulated seasons using every team's real schedule and how they've actually scored.
-        Top {playoffTeams} make it{byes ? `, top ${byes} get the bye` : ""}. Math doesn't care about your feelings.
+        {divisionCount
+          ? `Division winners take the top ${divisionCount} seeds${byes === divisionCount ? " and the byes" : ""}, then the best remaining records fill out the top ${playoffTeams}. Ties go to points for. `
+          : `Top ${playoffTeams} make it${byes ? `, top ${byes} get the bye` : ""}. `}
+        Math doesn't care about your feelings.
       </div>
       {error ? (
         <Card><div style={{ color: COLORS.muted }}>Couldn't load the remaining schedule from Sleeper. Refresh to try again.</div></Card>
@@ -2220,7 +2240,8 @@ function PlayoffOdds({ data }) {
                   {th("Record")}
                   {th("Proj W")}
                   {th("Playoffs", "left")}
-                  {byes ? th("Bye") : null}
+                  {divisionCount ? th("Win div") : null}
+                  {byes && byes !== divisionCount ? th("Bye") : null}
                   {th("#1 seed")}
                   {th("Last place")}
                 </tr>
@@ -2232,6 +2253,11 @@ function PlayoffOdds({ data }) {
                       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                         <Crest name={r.name} logo={r.avatar} size={24} />
                         <span style={{ fontWeight: 600 }}>{r.displayName}</span>
+                        {divisionCount && r.division ? (
+                          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: COLORS.muted, border: `1px solid ${COLORS.hairline}`, borderRadius: 4, padding: "1px 5px" }}>
+                            D{r.division}
+                          </span>
+                        ) : null}
                       </div>
                     </td>
                     <td style={{ ...mono, color: COLORS.muted }}>{r.record}</td>
@@ -2246,7 +2272,8 @@ function PlayoffOdds({ data }) {
                         </span>
                       </div>
                     </td>
-                    {byes ? <td style={mono}>{pct(r.bye)}</td> : null}
+                    {divisionCount ? <td style={mono}>{pct(r.divTitle)}</td> : null}
+                    {byes && byes !== divisionCount ? <td style={mono}>{pct(r.bye)}</td> : null}
                     <td style={mono}>{pct(r.first)}</td>
                     <td style={{ ...mono, color: r.last >= 0.2 ? COLORS.red : undefined }}>{pct(r.last, "last")}</td>
                   </tr>
