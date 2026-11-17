@@ -2573,8 +2573,11 @@ function PlayoffBracket({ data, standings, usersById }) {
   const fromLabel = (from) => {
     const src = byM[from.w ?? from.l];
     if (!src) return "TBD";
-    const seeds = [src.t1, src.t2].filter((x) => x != null).map((x) => `#${seedOf[x] ?? "?"}`);
-    return `${from.w != null ? "Winner" : "Loser"} of ${seeds.length === 2 ? seeds.join(" vs ") : "earlier game"}`;
+    const verb = from.w != null ? "Winner" : "Loser";
+    const seeds = [src.t1, src.t2].filter((x) => x != null).map((x) => seedOf[x]).filter(Boolean).sort((a, b) => a - b);
+    if (seeds.length === 2) return `${verb} of #${seeds[0]} vs #${seeds[1]}`;
+    const game = src.r === lastRound - 1 ? "semifinal" : `round ${src.r} game`;
+    return seeds.length === 1 ? `${verb} of #${seeds[0]}'s ${game}` : `${verb} of ${game}`;
   };
 
   const TeamLine = ({ rid, from, score, isWinner, decided }) => {
@@ -2602,11 +2605,17 @@ function PlayoffBracket({ data, standings, usersById }) {
     const sc = scoresFor(m.r);
     const decided = m.w != null;
     const isFinal = m === final;
+    // Better seed on top whenever both teams are known
+    let sides = [["t1", m.t1, m.t1_from], ["t2", m.t2, m.t2_from]];
+    if (m.t1 != null && m.t2 != null && (seedOf[m.t2] || 99) < (seedOf[m.t1] || 99)) sides = [sides[1], sides[0]];
+    const line = ([, rid, from]) => (
+      <TeamLine rid={rid} from={from} score={sc && rid != null ? sc[rid] : null} isWinner={decided && m.w === rid} decided={decided} />
+    );
     return (
       <div style={{ width: compact ? 210 : 220, background: COLORS.surface, border: `1px solid ${isFinal ? "#DAAA00" : COLORS.hairline}`, borderLeft: `3px solid ${isFinal ? "#DAAA00" : COLORS.turf}`, borderRadius: 8, padding: 3, boxShadow: isFinal ? "0 0 0 3px rgba(218,170,0,0.15)" : "none" }}>
-        <TeamLine rid={m.t1} from={m.t1_from} score={sc && m.t1 != null ? sc[m.t1] : null} isWinner={decided && m.w === m.t1} decided={decided} />
+        {line(sides[0])}
         <div style={{ height: 1, background: COLORS.hairline, margin: "0 6px" }} />
-        <TeamLine rid={m.t2} from={m.t2_from} score={sc && m.t2 != null ? sc[m.t2] : null} isWinner={decided && m.w === m.t2} decided={decided} />
+        {line(sides[1])}
       </div>
     );
   };
