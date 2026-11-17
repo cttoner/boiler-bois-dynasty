@@ -3592,126 +3592,6 @@ function RecapTab({ data, rostersById, usersById }) {
           };
         })}
       />
-
-      <StudDudBoard data={data} usersById={usersById} playerLabel={playerLabel} selectedSeason={selectedSeason} />
-    </div>
-  );
-}
-
-// ---- Stud & Dud board ----
-// Tallies every week's Stud (top-scoring starter) and Dud (lowest-scoring
-// starter) by manager, using the same rules as the weekly recap cards.
-// Ties count for everyone tied; a manager counts once per week per award.
-function StudDudBoard({ data, usersById, playerLabel, selectedSeason }) {
-  const [scope, setScope] = useState("season");
-  const currentSeason = data.league?.season;
-
-  const seasons = useMemo(() => {
-    const list = [
-      ...(data.seasonHistory || []).map((s) => ({ season: s.season, weekMatchups: s.weekMatchups || {}, rosters: s.rosters || [] })),
-      { season: currentSeason, weekMatchups: data.weekMatchups || {}, rosters: data.rosters || [] },
-    ];
-    return list.filter((s) => s.season);
-  }, [data.seasonHistory, data.weekMatchups, data.rosters, currentSeason]);
-
-  const board = useMemo(() => {
-    const inScope = scope === "all" ? seasons : seasons.filter((s) => String(s.season) === String(selectedSeason));
-    const tally = {}; // ownerId -> { studs: [], duds: [] }
-    let weeksCounted = 0;
-    inScope.forEach((sz) => {
-      const ownerOf = (rid) => sz.rosters.find((r) => r.roster_id === rid)?.owner_id;
-      Object.keys(sz.weekMatchups).map(Number).sort((a, b) => a - b).forEach((week) => {
-        const ms = sz.weekMatchups[week] || [];
-        if (!ms.some((m) => (m.points ?? 0) > 0)) return; // unplayed week
-        const recap = computeWeekRecap(ms, data.players);
-        if (!recap) return;
-        weeksCounted++;
-        [["studs", recap.stud], ["duds", recap.dud]].forEach(([kind, entries]) => {
-          const seen = new Set();
-          (entries || []).forEach((e) => {
-            const oid = ownerOf(e.rosterId);
-            if (!oid || seen.has(oid)) return;
-            seen.add(oid);
-            if (!tally[oid]) tally[oid] = { studs: [], duds: [] };
-            tally[oid][kind].push({ playerId: e.playerId, points: e.points, week, season: sz.season });
-          });
-        });
-      });
-    });
-    const rows = Object.entries(tally).map(([ownerId, t]) => ({ ownerId, ...t }));
-    return {
-      weeksCounted,
-      studs: rows.filter((r) => r.studs.length).sort((a, b) => b.studs.length - a.studs.length || b.duds.length - a.duds.length),
-      duds: rows.filter((r) => r.duds.length).sort((a, b) => b.duds.length - a.duds.length || a.studs.length - b.studs.length),
-    };
-  }, [scope, seasons, selectedSeason, data.players]);
-
-  const userFor = (oid) => usersById[oid] || (data.seasonHistory || []).flatMap((s) => s.users || []).find((u) => u.user_id === oid);
-  const shortName = (pid) => {
-    const p = data.players?.[pid];
-    return p ? `${(p.first_name || "")[0] || ""}. ${p.last_name || ""}`.trim() : playerLabel(pid);
-  };
-
-  const List = ({ title, rows, kind, accent }) => (
-    <div style={{ flex: "1 1 320px", minWidth: 0 }}>
-      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: accent, marginBottom: 6 }}>{title}</div>
-      <Card style={{ padding: 0, overflow: "hidden", borderTop: `3px solid ${accent}` }}>
-        {rows.length === 0 ? (
-          <div style={{ padding: 12, color: COLORS.muted, fontSize: 13 }}>Nothing yet.</div>
-        ) : (
-          rows.map((r, i) => {
-            const u = userFor(r.ownerId);
-            const items = r[kind];
-            return (
-              <div key={r.ownerId} style={{ display: "flex", gap: 10, padding: "9px 12px", borderTop: i ? `1px solid ${COLORS.hairline}` : "none", alignItems: "flex-start" }}>
-                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: COLORS.muted, width: 16, paddingTop: 6 }}>{i + 1}</div>
-                <Crest name={teamName(u)} logo={avatarUrl(u)} size={26} />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 600, fontSize: 14 }}>{withOwner(u)}</div>
-                  <div style={{ fontSize: 11, color: COLORS.muted, marginTop: 2, lineHeight: 1.4 }}>
-                    {items
-                      .map((it) => `${shortName(it.playerId)} ${fmt(it.points)} (Wk ${it.week}${scope === "all" ? `, ${it.season}` : ""})`)
-                      .join(" · ")}
-                  </div>
-                </div>
-                <div style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 18, color: accent, paddingTop: 2 }}>{items.length}</div>
-              </div>
-            );
-          })
-        )}
-      </Card>
-    </div>
-  );
-
-  return (
-    <div style={{ marginTop: 24 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 4 }}>
-        <SectionLabel>Stud &amp; Dud board</SectionLabel>
-        <div style={{ display: "flex", gap: 4 }}>
-          {[["season", `${selectedSeason || currentSeason}`], ["all", "All time"]].map(([id, label]) => (
-            <button
-              key={id}
-              onClick={() => setScope(id)}
-              style={{
-                fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, padding: "5px 10px", borderRadius: 6, cursor: "pointer",
-                border: `1px solid ${scope === id ? COLORS.turf : COLORS.hairline}`,
-                background: scope === id ? COLORS.turfTint : "transparent",
-                color: scope === id ? COLORS.turf : COLORS.muted,
-              }}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      </div>
-      <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
-        Who keeps starting the week's best player, and who keeps starting the worst. {board.weeksCounted} completed{" "}
-        {board.weeksCounted === 1 ? "week" : "weeks"} counted. Ties count for everyone tied.
-      </div>
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-        <List title="Studs" rows={board.studs} kind="studs" accent={COLORS.gold} />
-        <List title="Duds" rows={board.duds} kind="duds" accent={COLORS.red} />
-      </div>
     </div>
   );
 }
@@ -3947,6 +3827,7 @@ function RostersTab({ rosters, usersById, players, selectedRosterId, setSelected
       team: p.team || null,
       age: playerAge(p),
       injuryStatus: p.injury_status || null,
+      boiler: isBoilermaker(p),
     };
   }
   function playerLabel(pid) {
@@ -4374,6 +4255,24 @@ function StatRow({ label, value, sub, accent }) {
   );
 }
 
+// Purdue alums get a small old-gold tag, from Sleeper's college field.
+function isBoilermaker(p) {
+  return !!p && /purdue/i.test(p.college || "");
+}
+function BoilerTag() {
+  return (
+    <span
+      title="Purdue Boilermaker"
+      style={{
+        fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, fontWeight: 700, letterSpacing: "0.06em",
+        padding: "1px 5px", borderRadius: 4, background: "#000000", color: "#CFB991", flexShrink: 0,
+      }}
+    >
+      BOILER
+    </span>
+  );
+}
+
 function PlayerRow({ info, first, muted }) {
   const pc = positionColor(info.position);
   return (
@@ -4404,7 +4303,10 @@ function PlayerRow({ info, first, muted }) {
           {info.position}
         </span>
       )}
-      <span style={{ color: muted ? COLORS.muted : COLORS.bone, fontSize: 13, minWidth: 0, flex: "1 1 auto", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{info.name}</span>
+      <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, flex: "1 1 auto" }}>
+        <span style={{ color: muted ? COLORS.muted : COLORS.bone, fontSize: 13, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{info.name}</span>
+        {info.boiler && <BoilerTag />}
+      </span>
       {info.injuryStatus && (
         <span
           style={{
@@ -6223,6 +6125,18 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
   const settings = league?.settings || {};
   const waiverLabel = settings.waiver_budget > 0 ? `FAAB ($${settings.waiver_budget})` : "Rolling priority";
 
+  const boilermakers = useMemo(() => {
+    const out = [];
+    (rosters || []).forEach((r) => {
+      const owner = usersById[r.owner_id];
+      (r.players || []).forEach((pid) => {
+        const p = players?.[pid];
+        if (isBoilermaker(p)) out.push({ pid, name: `${p.first_name || ""} ${p.last_name || ""}`.trim(), pos: p.position, team: p.team, owner });
+      });
+    });
+    return out.sort((a, b) => a.name.localeCompare(b.name));
+  }, [rosters, players, usersById]);
+
   const glanceRows = [
     ["League size", `${rosters.length} teams`],
     ["Format", "Head-to-head"],
@@ -6375,6 +6289,32 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
           )}
         </div>
         </div>
+      </div>
+
+      {/* Boilermakers on rosters */}
+      <div style={{ marginBottom: 14 }}>
+        <SectionLabel>Boilermakers in the league</SectionLabel>
+        <Card style={{ background: "#000000", border: "1px solid #CFB991", padding: "12px 14px" }}>
+          <div style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 15, color: "#CFB991", marginBottom: 6 }}>
+            Boiler Up. 🚂
+          </div>
+          <div style={{ fontSize: 12, color: "rgba(255,255,255,0.72)", marginBottom: boilermakers.length ? 10 : 0 }}>
+            A league built by Purdue grads should be rooting for Purdue guys. Every former Boilermaker on a roster shows up here, and gets a BOILER tag on the Rosters page.
+          </div>
+          {boilermakers.length === 0 ? (
+            <div style={{ fontSize: 13, color: "#CFB991" }}>No Boilermakers rostered right now. Somebody fix that.</div>
+          ) : (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {boilermakers.map((b) => (
+                <div key={b.pid} style={{ display: "flex", alignItems: "center", gap: 8, background: "rgba(207,185,145,0.12)", border: "1px solid rgba(207,185,145,0.45)", borderRadius: 8, padding: "6px 10px" }}>
+                  <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, fontWeight: 700, color: "#000000", background: "#CFB991", borderRadius: 4, padding: "1px 5px" }}>{b.pos}</span>
+                  <span style={{ color: "#FFFFFF", fontWeight: 600, fontSize: 13 }}>{b.name}</span>
+                  <span style={{ color: "rgba(255,255,255,0.6)", fontSize: 12 }}>{b.team || "FA"} · {b.owner ? withOwner(b.owner) : "?"}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
       </div>
 
       {/* League history: podium by year */}
