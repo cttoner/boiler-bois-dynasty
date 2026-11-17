@@ -6125,18 +6125,6 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
   const settings = league?.settings || {};
   const waiverLabel = settings.waiver_budget > 0 ? `FAAB ($${settings.waiver_budget})` : "Rolling priority";
 
-  const boilermakers = useMemo(() => {
-    const out = [];
-    (rosters || []).forEach((r) => {
-      const owner = usersById[r.owner_id];
-      (r.players || []).forEach((pid) => {
-        const p = players?.[pid];
-        if (isBoilermaker(p)) out.push({ pid, name: `${p.first_name || ""} ${p.last_name || ""}`.trim(), pos: p.position, team: p.team, owner });
-      });
-    });
-    return out.sort((a, b) => a.name.localeCompare(b.name));
-  }, [rosters, players, usersById]);
-
   const glanceRows = [
     ["League size", `${rosters.length} teams`],
     ["Format", "Head-to-head"],
@@ -6154,7 +6142,7 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
       {/* Champions banner strip */}
       {orderedTitles.length > 0 && (
         <div style={{ marginBottom: 20 }}>
-          <SectionLabel>Champions</SectionLabel>
+          <SectionLabel>{TROPHY_NAME} champions</SectionLabel>
           <div style={{ display: "flex", gap: 18, overflowX: "auto", padding: "10px 4px 12px" }}>
             {orderedTitles.map((s) => (
               <div key={s.season} style={{ display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0 }}>
@@ -6174,6 +6162,9 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
                 >
                   <Crest name={teamName(s.champion)} logo={avatarUrl(s.champion)} size={38} />
                   <div style={{ textAlign: "center" }}>
+                    <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, letterSpacing: "0.12em", color: "#CFB991", textTransform: "uppercase" }}>
+                      {TROPHY_NAME}
+                    </div>
                     <div style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 13, color: COLORS.yellow }}>
                       {s.season}
                     </div>
@@ -6232,10 +6223,10 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
           <InfoTable title="League at a glance" rows={glanceRows} />
         </div>
         <div style={{ flex: "1 1 320px", minWidth: 280 }}>
-          <SectionLabel>Titles</SectionLabel>
+          <SectionLabel>{TROPHY_NAME} titles</SectionLabel>
           {championsByOwner.length === 0 ? (
             <Card>
-              <div style={{ color: COLORS.muted, borderLeft: `3px solid ${COLORS.leather}`, paddingLeft: 10 }}>No champions crowned yet. That's still this season's to decide.</div>
+              <div style={{ color: COLORS.muted, borderLeft: `3px solid ${COLORS.leather}`, paddingLeft: 10 }}>Nobody's lifted {TROPHY_NAME} yet. That's still this season's to decide.</div>
             </Card>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -6252,7 +6243,7 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
                     </div>
                   </div>
                   <div style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 18, color: COLORS.gold, whiteSpace: "nowrap", flexShrink: 0 }}>
-                    {c.years.length} {c.years.length === 1 ? "title" : "titles"}
+                    {cupCount(c.years.length)}
                   </div>
                 </Card>
               ))}
@@ -6291,32 +6282,6 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
         </div>
       </div>
 
-      {/* Boilermakers on rosters */}
-      <div style={{ marginBottom: 14 }}>
-        <SectionLabel>Boilermakers in the league</SectionLabel>
-        <Card style={{ background: "#000000", border: "1px solid #CFB991", padding: "12px 14px" }}>
-          <div style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 15, color: "#CFB991", marginBottom: 6 }}>
-            Boiler Up. 🚂
-          </div>
-          <div style={{ fontSize: 12, color: "rgba(255,255,255,0.72)", marginBottom: boilermakers.length ? 10 : 0 }}>
-            A league built by Purdue grads should be rooting for Purdue guys. Every former Boilermaker on a roster shows up here, and gets a BOILER tag on the Rosters page.
-          </div>
-          {boilermakers.length === 0 ? (
-            <div style={{ fontSize: 13, color: "#CFB991" }}>No Boilermakers rostered right now. Somebody fix that.</div>
-          ) : (
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-              {boilermakers.map((b) => (
-                <div key={b.pid} style={{ display: "flex", alignItems: "center", gap: 8, background: "rgba(207,185,145,0.12)", border: "1px solid rgba(207,185,145,0.45)", borderRadius: 8, padding: "6px 10px" }}>
-                  <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, fontWeight: 700, color: "#000000", background: "#CFB991", borderRadius: 4, padding: "1px 5px" }}>{b.pos}</span>
-                  <span style={{ color: "#FFFFFF", fontWeight: 600, fontSize: 13 }}>{b.name}</span>
-                  <span style={{ color: "rgba(255,255,255,0.6)", fontSize: 12 }}>{b.team || "FA"} · {b.owner ? withOwner(b.owner) : "?"}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </Card>
-      </div>
-
       {/* League history: podium by year */}
       <SectionLabel>League history</SectionLabel>
       {historyRows.length === 0 ? (
@@ -6347,8 +6312,8 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
               const pick = (cond, card) => (cond ? [card] : []);
               const cards = [
                 {
-                  label: "Most titles",
-                  value: mostTitles ? `${mostTitles.years.length} ${mostTitles.years.length === 1 ? "title" : "titles"}` : "-",
+                  label: "Most Gold Cups",
+                  value: mostTitles ? cupCount(mostTitles.years.length) : "-",
                   user: currentUser(mostTitles?.user),
                   note: mostTitles ? mostTitles.years.slice().sort().map((y) => asOf(mostTitles.user.user_id, y)).join(" · ") : null,
                 },
@@ -6456,6 +6421,9 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
     </div>
   );
 }
+
+const TROPHY_NAME = "The Gold Cup";
+const cupCount = (n) => `${n} ${n === 1 ? "Gold Cup" : "Gold Cups"}`;
 
 const SUPERLATIVE_ACCENTS = ["#FF6B00", "#0E4D33", "#B8860B", "#7B4B27", "#3F7A63", "#C1490A", "#5A371C", "#D9560A"];
 
