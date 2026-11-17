@@ -85,7 +85,7 @@ textarea:hover, textarea:focus { border-color: #0E4D33; outline: none; }
 .site-nav { scrollbar-width: none; }
 .site-nav::-webkit-scrollbar { display: none; }
 .mobile-only { display: none !important; }
-.home-super-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 10px; }
+.home-super-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 10px; }
 @media (max-width: 640px) {
   .mobile-only { display: block !important; }
   .desktop-only { display: none !important; }
@@ -98,6 +98,7 @@ textarea:hover, textarea:focus { border-color: #0E4D33; outline: none; }
   .sortable-table .col-team { position: sticky; left: 0; z-index: 1; background: #FFFFFF; white-space: nowrap; box-shadow: 1px 0 0 rgba(14,77,51,0.14); }
   .sortable-table thead .col-team { background: #EAF4EE; }
   .home-super-grid { grid-template-columns: 1fr; }
+  .roster-cols { grid-template-columns: minmax(0, 1fr) !important; }
 }
 `;
 
@@ -3707,7 +3708,7 @@ function RostersTab({ rosters, usersById, players, selectedRosterId, setSelected
               )}
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 12 }}>
+            <div className="roster-cols" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 12 }}>
               <div>
                 <SectionLabel>Starters</SectionLabel>
                 {(roster.starters || []).map((pid, i) => (
