@@ -4,7 +4,13 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Boiler Dynasty</title>
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%231C1C1C'/%3E%3Cellipse cx='50' cy='50' rx='32' ry='20' fill='%23B58A00'/%3E%3Cpath d='M27 50h46M40 42v16M50 40v20M60 42v16' stroke='white' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E" />
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png" />
+<link rel="apple-touch-icon" href="apple-touch-icon.png" />
+<link rel="manifest" href="manifest.webmanifest" />
+<meta name="theme-color" content="#0E4D33" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-title" content="Boiler Dynasty" />
 <style>
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; background: #FAF9F6; overflow-x: hidden; width: 100%; }
@@ -29,26 +35,67 @@ const API = "https://api.sleeper.app/v1";
 const PLAYERS_CACHE_KEY = "boilerbois_players_cache_v1";
 const PLAYERS_CACHE_MAX_AGE_MS = 12 * 60 * 60 * 1000; // 12 hours
 
-function loadCachedPlayers() {
+// Browser cache in IndexedDB (much more room than localStorage, which
+// was too small for Sleeper's player list). Everything here is optional:
+// if the browser blocks storage, the site just fetches like normal.
+const IDB_NAME = "boilerdynasty";
+const IDB_STORE = "cache";
+const CACHE_VERSION = 1; // bump if the shape of cached data ever changes
+function idbOpen() {
+  return new Promise((resolve, reject) => {
+    if (!window.indexedDB) return reject(new Error("no indexedDB"));
+    const req = indexedDB.open(IDB_NAME, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore(IDB_STORE);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+async function idbGet(key) {
   try {
-    const raw = localStorage.getItem(PLAYERS_CACHE_KEY);
-    if (!raw) return null;
-    const cached = JSON.parse(raw);
-    if (!cached.fetchedAt || Date.now() - cached.fetchedAt > PLAYERS_CACHE_MAX_AGE_MS) return null;
-    return cached.players || null;
+    const db = await idbOpen();
+    return await new Promise((resolve) => {
+      const q = db.transaction(IDB_STORE, "readonly").objectStore(IDB_STORE).get(key);
+      q.onsuccess = () => resolve(q.result);
+      q.onerror = () => resolve(undefined);
+    });
   } catch (e) {
-    return null;
+    return undefined;
+  }
+}
+async function idbSet(key, value) {
+  try {
+    const db = await idbOpen();
+    await new Promise((resolve) => {
+      const tx = db.transaction(IDB_STORE, "readwrite");
+      tx.objectStore(IDB_STORE).put(value, key);
+      tx.oncomplete = resolve; tx.onerror = resolve; tx.onabort = resolve;
+    });
+  } catch (e) {
+    // caching is a nice-to-have
   }
 }
 
-function saveCachedPlayers(players) {
-  try {
-    localStorage.setItem(PLAYERS_CACHE_KEY, JSON.stringify({ fetchedAt: Date.now(), players }));
-  } catch (e) {
-    // Storage full, unavailable, or blocked (private browsing, etc.) -
-    // caching is a nice-to-have, so just skip it rather than fail the load.
-  }
+// Only the player fields the site actually uses, so the cache stays small.
+function slimPlayers(raw) {
+  const out = {};
+  Object.entries(raw || {}).forEach(([id, p]) => {
+    if (!p) return;
+    out[id] = {
+      first_name: p.first_name, last_name: p.last_name, position: p.position, team: p.team,
+      injury_status: p.injury_status, birth_date: p.birth_date, age: p.age, college: p.college,
+    };
+  });
+  return out;
 }
+async function loadCachedPlayers() {
+  const cached = await idbGet(`players_v${CACHE_VERSION}`);
+  if (!cached || !cached.fetchedAt || Date.now() - cached.fetchedAt > PLAYERS_CACHE_MAX_AGE_MS) return null;
+  return cached.players || null;
+}
+function saveCachedPlayers(players) {
+  idbSet(`players_v${CACHE_VERSION}`, { fetchedAt: Date.now(), players });
+}
+try { localStorage.removeItem(PLAYERS_CACHE_KEY); } catch (e) {}
 
 const fontImport = `
 @import url('https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
@@ -494,7 +541,7 @@ function useLeagueData(leagueId) {
         guard++;
         try {
           const seasonLeague = await j(`${API}/league/${cursor}`);
-          chain.push({ leagueId: cursor, season: seasonLeague.season, playoffWeekStart: seasonLeague.settings?.playoff_week_start });
+          chain.push({ leagueId: cursor, season: seasonLeague.season, playoffWeekStart: seasonLeague.settings?.playoff_week_start, status: seasonLeague.status });
           cursor = seasonLeague.previous_league_id;
         } catch (e) {
           cursor = null;
@@ -508,7 +555,14 @@ function useLeagueData(leagueId) {
       // no longer wipes out every older season behind it either, since
       // each season now succeeds or fails independently.
       const results = await Promise.all(
-        chain.map(async ({ leagueId, season, playoffWeekStart }) => {
+        chain.map(async ({ leagueId, season, playoffWeekStart, status }) => {
+          // A finished season never changes, so it's saved in the browser
+          // after the first visit and read from there from then on.
+          const cacheKey = `season_v${CACHE_VERSION}_${leagueId}`;
+          if (status === "complete") {
+            const cached = await idbGet(cacheKey);
+            if (cached && cached.season) return cached;
+          }
           try {
             const [seasonUsers, seasonRosters] = await Promise.all([
               j(`${API}/league/${leagueId}/users`),
@@ -519,7 +573,7 @@ function useLeagueData(leagueId) {
               fetchSeasonTrades(leagueId, season, seasonRosters, seasonUsers),
               fetchSeasonDraft(leagueId, seasonRosters, seasonUsers),
             ]);
-            return {
+            const built = {
               season,
               leagueId,
               playoffWeekStart,
@@ -530,6 +584,8 @@ function useLeagueData(leagueId) {
               draftPicks,
               ...awards,
             };
+            if (status === "complete") idbSet(cacheKey, built);
+            return built;
           } catch (e) {
             return null;
           }
@@ -553,12 +609,13 @@ function useLeagueData(leagueId) {
         const isActiveSeason = seasonType === "regular" || seasonType === "post";
         const week = isActiveSeason ? Math.max(1, nflState.week || 1) : 1;
 
-        const cachedPlayers = loadCachedPlayers();
-        const [users, rosters, playersRaw] = await Promise.all([
+        const cachedPlayers = await loadCachedPlayers();
+        const [users, rosters, playersFetched] = await Promise.all([
           j(`${API}/league/${leagueId}/users`),
           j(`${API}/league/${leagueId}/rosters`),
-          cachedPlayers ? Promise.resolve(cachedPlayers) : j(`${API}/players/nfl`).catch(() => ({})),
+          cachedPlayers ? Promise.resolve(cachedPlayers) : j(`${API}/players/nfl`).then(slimPlayers).catch(() => ({})),
         ]);
+        const playersRaw = playersFetched;
         if (!cachedPlayers && playersRaw && Object.keys(playersRaw).length > 0) {
           saveCachedPlayers(playersRaw);
         }
@@ -1426,13 +1483,20 @@ function App() {
           />
         )}
         {tab === "matchups" && (
-          <MatchupsTab
-            matchups={data.matchups}
-            rostersById={rostersById}
-            usersById={usersById}
-            week={data.week}
-            seasonType={data.seasonType}
-          />
+          <>
+            {(data.week >= (data.league?.settings?.playoff_week_start || 15) || data.seasonType === "post") && (
+              <div style={{ marginBottom: 22 }}>
+                <PlayoffBracket data={data} standings={standings} usersById={usersById} />
+              </div>
+            )}
+            <MatchupsTab
+              matchups={data.matchups}
+              rostersById={rostersById}
+              usersById={usersById}
+              week={data.week}
+              seasonType={data.seasonType}
+            />
+          </>
         )}
         {tab === "recap" && (
           <RecapTab data={data} rostersById={rostersById} usersById={usersById} />
@@ -1926,6 +1990,9 @@ function StandingsTab({ standings, playoffTeams, data, usersById }) {
             </div>
           ) : null}
           <PlayoffOdds data={data} />
+          {data.week < (data.league?.settings?.playoff_week_start || 15) && (
+            <PlayoffBracket data={data} standings={standings} usersById={usersById} />
+          )}
         </div>
       ) : (
         <div>
@@ -2441,6 +2508,170 @@ function PlayoffOdds({ data }) {
         "Lock" and "Out" mean it happened in every simulation, not that it's mathematically official. Projected wins
         include current wins. Odds refresh every time the page loads, so they'll move a point or two run to run.
       </div>
+    </div>
+  );
+}
+
+
+// ---- Playoff bracket ----
+// Drawn straight from Sleeper's winners bracket. Before the playoffs,
+// Sleeper keeps it filled in from the current standings, so it doubles as
+// "if the season ended today". Scores come from each playoff week.
+function computeSeeds(standings, rosters, divisionCount) {
+  const divOf = Object.fromEntries((rosters || []).map((r) => [r.roster_id, r.settings?.division ?? null]));
+  let seeded = standings.map((s) => s.rosterId);
+  if (divisionCount) {
+    const seen = new Set();
+    const leaders = [];
+    standings.forEach((s) => {
+      const d = divOf[s.rosterId];
+      if (d != null && !seen.has(d)) { seen.add(d); leaders.push(s.rosterId); }
+    });
+    seeded = [...leaders, ...seeded.filter((id) => !leaders.includes(id))];
+  }
+  return Object.fromEntries(seeded.map((id, i) => [id, i + 1]));
+}
+
+function PlayoffBracket({ data, standings, usersById }) {
+  const { league, rosters, week, weekMatchups, matchups } = data;
+  const bracket = data.currentBracket || [];
+  const playoffStart = league?.settings?.playoff_week_start || 15;
+  const divisionCount = league?.settings?.divisions > 1 ? league.settings.divisions : 0;
+  const seedOf = useMemo(() => computeSeeds(standings, rosters, divisionCount), [standings, rosters, divisionCount]);
+  if (!bracket.length) return null;
+
+  const byM = Object.fromEntries(bracket.map((m) => [m.m, m]));
+  const rounds = [...new Set(bracket.map((m) => m.r))].sort((a, b) => a - b);
+  const lastRound = rounds[rounds.length - 1];
+  const final = bracket.find((m) => m.p === 1) || bracket.find((m) => m.r === lastRound);
+  const started = week >= playoffStart;
+  const champion = final?.w;
+
+  const ownerOf = (rid) => usersById[(rosters || []).find((r) => r.roster_id === rid)?.owner_id];
+  const scoresFor = (r) => {
+    const wk = playoffStart + r - 1;
+    const list = wk === week ? matchups : (weekMatchups || {})[wk];
+    if (!list || wk > week) return null;
+    return Object.fromEntries((list || []).map((m) => [m.roster_id, m.points ?? 0]));
+  };
+  const roundName = (r) =>
+    r === lastRound ? "Championship" : r === lastRound - 1 ? "Semifinals" : `Round ${r}`;
+
+  // Order each column by walking back from the final so the tree lines up.
+  const columns = {};
+  const walk = (m) => {
+    if (!m) return;
+    (columns[m.r] = columns[m.r] || []).push({ match: m });
+    [["t1", m.t1_from], ["t2", m.t2_from]].forEach(([side, from]) => {
+      if (m.r <= rounds[0]) return;
+      if (from && from.w != null) walk(byM[from.w]);
+      else if (m[side] != null) (columns[m.r - 1] = columns[m.r - 1] || []).push({ bye: m[side] });
+    });
+  };
+  walk(final);
+
+  const fromLabel = (from) => {
+    const src = byM[from.w ?? from.l];
+    if (!src) return "TBD";
+    const seeds = [src.t1, src.t2].filter((x) => x != null).map((x) => `#${seedOf[x] ?? "?"}`);
+    return `${from.w != null ? "Winner" : "Loser"} of ${seeds.length === 2 ? seeds.join(" vs ") : "earlier game"}`;
+  };
+
+  const TeamLine = ({ rid, from, score, isWinner, decided }) => {
+    const u = rid != null ? ownerOf(rid) : null;
+    const dim = decided && !isWinner;
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", opacity: dim ? 0.5 : 1, background: isWinner ? "rgba(218,170,0,0.14)" : "transparent", borderRadius: 4 }}>
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: COLORS.muted, width: 18, textAlign: "right" }}>
+          {rid != null && seedOf[rid] ? `#${seedOf[rid]}` : ""}
+        </span>
+        {u ? <Crest name={teamName(u)} logo={avatarUrl(u)} size={20} /> : <div style={{ width: 20, height: 20, borderRadius: 4, border: `1px dashed ${COLORS.hairline}` }} />}
+        <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: isWinner ? 700 : 600, color: u ? COLORS.bone : COLORS.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontStyle: u ? "normal" : "italic" }}>
+          {u ? teamName(u) : from ? fromLabel(from) : "TBD"}
+        </span>
+        {score != null && (
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, fontWeight: isWinner ? 700 : 400, color: isWinner ? COLORS.gold : COLORS.muted }}>
+            {fmt(score)}
+          </span>
+        )}
+      </div>
+    );
+  };
+
+  const MatchCard = ({ m, compact }) => {
+    const sc = scoresFor(m.r);
+    const decided = m.w != null;
+    const isFinal = m === final;
+    return (
+      <div style={{ width: compact ? 210 : 220, background: COLORS.surface, border: `1px solid ${isFinal ? "#DAAA00" : COLORS.hairline}`, borderLeft: `3px solid ${isFinal ? "#DAAA00" : COLORS.turf}`, borderRadius: 8, padding: 3, boxShadow: isFinal ? "0 0 0 3px rgba(218,170,0,0.15)" : "none" }}>
+        <TeamLine rid={m.t1} from={m.t1_from} score={sc && m.t1 != null ? sc[m.t1] : null} isWinner={decided && m.w === m.t1} decided={decided} />
+        <div style={{ height: 1, background: COLORS.hairline, margin: "0 6px" }} />
+        <TeamLine rid={m.t2} from={m.t2_from} score={sc && m.t2 != null ? sc[m.t2] : null} isWinner={decided && m.w === m.t2} decided={decided} />
+      </div>
+    );
+  };
+
+  const ByeCard = ({ rid }) => {
+    const u = ownerOf(rid);
+    return (
+      <div style={{ width: 220, border: `1px dashed ${COLORS.hairline}`, borderRadius: 8, padding: "8px 10px", display: "flex", alignItems: "center", gap: 8, background: "rgba(255,255,255,0.6)" }}>
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: COLORS.muted }}>#{seedOf[rid]}</span>
+        {u && <Crest name={teamName(u)} logo={avatarUrl(u)} size={20} />}
+        <span style={{ flex: 1, fontSize: 12.5, fontWeight: 600, color: COLORS.bone, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{u ? teamName(u) : "?"}</span>
+        <span style={{ fontSize: 10, fontWeight: 700, color: "#FFFFFF", background: COLORS.pylon, borderRadius: 999, padding: "1px 6px" }}>BYE</span>
+      </div>
+    );
+  };
+
+  const placement = bracket.filter((m) => m.p && m.p !== 1).sort((a, b) => a.p - b.p);
+  const champUser = champion != null ? ownerOf(champion) : null;
+
+  return (
+    <div style={{ marginTop: 22 }}>
+      <SectionLabel>Playoff bracket</SectionLabel>
+      <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
+        {started
+          ? "Straight from Sleeper. Scores update as the playoff weeks play out."
+          : "If the season ended today. Sleeper keeps this filled in from the current standings until Week " + playoffStart + " locks it in."}
+      </div>
+      {champUser && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, background: "#0E4D33", border: "2px solid #DAAA00", borderRadius: 10, padding: "10px 14px", marginBottom: 12, color: "#FFFFFF" }}>
+          <span style={{ fontSize: 20 }}>🏆</span>
+          <Crest name={teamName(champUser)} logo={avatarUrl(champUser)} size={28} />
+          <div>
+            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, letterSpacing: "0.16em", color: "#CFB991" }}>{league?.season} CHAMPION</div>
+            <div style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 16 }}>{withOwner(champUser)}</div>
+          </div>
+        </div>
+      )}
+      <Card style={{ padding: 12, overflowX: "auto" }}>
+        <div style={{ display: "flex", gap: 18, minWidth: "max-content" }}>
+          {rounds.map((r) => (
+            <div key={r} style={{ display: "flex", flexDirection: "column" }}>
+              <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10.5, letterSpacing: "0.08em", textTransform: "uppercase", color: r === lastRound ? COLORS.gold : COLORS.turf, fontWeight: 700, marginBottom: 8 }}>
+                {roundName(r)} <span style={{ color: COLORS.muted, fontWeight: 400 }}>· Wk {playoffStart + r - 1}</span>
+              </div>
+              <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "space-around", gap: 10, minHeight: 300 }}>
+                {(columns[r] || []).map((it, i) =>
+                  it.bye != null ? <ByeCard key={`b${i}`} rid={it.bye} /> : <MatchCard key={it.match.m} m={it.match} />
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </Card>
+      {placement.length > 0 && (
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 10 }}>
+          {placement.map((m) => (
+            <div key={m.m}>
+              <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10.5, letterSpacing: "0.08em", textTransform: "uppercase", color: COLORS.muted, marginBottom: 6 }}>
+                {ordinal(m.p)} place · Wk {playoffStart + m.r - 1}
+              </div>
+              <MatchCard m={m} compact />
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
