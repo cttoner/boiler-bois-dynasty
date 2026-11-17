@@ -40,7 +40,7 @@ const PLAYERS_CACHE_MAX_AGE_MS = 12 * 60 * 60 * 1000; // 12 hours
 // if the browser blocks storage, the site just fetches like normal.
 const IDB_NAME = "boilerdynasty";
 const IDB_STORE = "cache";
-const CACHE_VERSION = 1; // bump if the shape of cached data ever changes
+const CACHE_VERSION = 2; // bump if the shape of cached data ever changes
 function idbOpen() {
   return new Promise((resolve, reject) => {
     if (!window.indexedDB) return reject(new Error("no indexedDB"));
@@ -452,6 +452,7 @@ function useLeagueData(leagueId) {
 
       return {
         champion, runnerUp, third, lastPlace, standings, playoffWins, playoffLosses, highGame, h2h, bestPlayerGame,
+        bracket: Array.isArray(bracket) ? bracket : [],
         ownerWeeklyHigh, ownerBestPlayerGame, ownerPlayerTotals, weekMatchups: seasonWeekMatchups,
       };
     }
@@ -541,7 +542,11 @@ function useLeagueData(leagueId) {
         guard++;
         try {
           const seasonLeague = await j(`${API}/league/${cursor}`);
-          chain.push({ leagueId: cursor, season: seasonLeague.season, playoffWeekStart: seasonLeague.settings?.playoff_week_start, status: seasonLeague.status });
+          chain.push({
+            leagueId: cursor, season: seasonLeague.season, status: seasonLeague.status,
+            playoffWeekStart: seasonLeague.settings?.playoff_week_start,
+            divisions: seasonLeague.settings?.divisions || 0,
+          });
           cursor = seasonLeague.previous_league_id;
         } catch (e) {
           cursor = null;
@@ -555,7 +560,7 @@ function useLeagueData(leagueId) {
       // no longer wipes out every older season behind it either, since
       // each season now succeeds or fails independently.
       const results = await Promise.all(
-        chain.map(async ({ leagueId, season, playoffWeekStart, status }) => {
+        chain.map(async ({ leagueId, season, playoffWeekStart, status, divisions }) => {
           // A finished season never changes, so it's saved in the browser
           // after the first visit and read from there from then on.
           const cacheKey = `season_v${CACHE_VERSION}_${leagueId}`;
@@ -577,6 +582,7 @@ function useLeagueData(leagueId) {
               season,
               leagueId,
               playoffWeekStart,
+              divisions,
               users: seasonUsers,
               rosters: seasonRosters,
               trades: seasonTransactions.trades,
@@ -1549,6 +1555,7 @@ function App() {
             seasonHistory={data.seasonHistory}
             superlatives={leagueSuper}
             players={data.players}
+            data={data}
           />
         )}
       </div>
@@ -2532,11 +2539,22 @@ function computeSeeds(standings, rosters, divisionCount) {
   return Object.fromEntries(seeded.map((id, i) => [id, i + 1]));
 }
 
-function PlayoffBracket({ data, standings, usersById }) {
-  const { league, rosters, week, weekMatchups, matchups } = data;
-  const bracket = data.currentBracket || [];
-  const playoffStart = league?.settings?.playoff_week_start || 15;
-  const divisionCount = league?.settings?.divisions > 1 ? league.settings.divisions : 0;
+function PlayoffBracket({ data, standings, usersById, archive }) {
+  // `archive` draws a past season instead of the current one
+  const league = data.league;
+  const rosters = archive ? archive.rosters : data.rosters;
+  const week = archive ? 99 : data.week;
+  const weekMatchups = archive ? archive.weekMatchups : data.weekMatchups;
+  const matchups = archive ? [] : data.matchups;
+  const bracket = (archive ? archive.bracket : data.currentBracket) || [];
+  const playoffStart = archive ? archive.playoffWeekStart || 15 : league?.settings?.playoff_week_start || 15;
+  const divs = archive ? archive.divisions : league?.settings?.divisions;
+  const divisionCount = divs > 1 ? divs : 0;
+  if (archive) {
+    usersById = Object.fromEntries((archive.users || []).map((u) => [u.user_id, u]));
+    standings = archive.standings || [];
+  }
+  const seasonLabel = archive ? archive.season : league?.season;
   const seedOf = useMemo(() => computeSeeds(standings, rosters, divisionCount), [standings, rosters, divisionCount]);
   if (!bracket.length) return null;
 
@@ -2637,9 +2655,11 @@ function PlayoffBracket({ data, standings, usersById }) {
 
   return (
     <div style={{ marginTop: 22 }}>
-      <SectionLabel>Playoff bracket</SectionLabel>
+      <SectionLabel>{archive ? `${seasonLabel} playoff bracket` : "Playoff bracket"}</SectionLabel>
       <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
-        {started
+        {archive
+          ? "How it played out, with every playoff score. Team names are what each manager called their team that year."
+          : started
           ? "Straight from Sleeper. Scores update as the playoff weeks play out."
           : "If the season ended today. Sleeper keeps this filled in from the current standings until Week " + playoffStart + " locks it in."}
       </div>
@@ -2648,7 +2668,7 @@ function PlayoffBracket({ data, standings, usersById }) {
           <span style={{ fontSize: 20 }}>🏆</span>
           <Crest name={teamName(champUser)} logo={avatarUrl(champUser)} size={28} />
           <div>
-            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, letterSpacing: "0.16em", color: "#CFB991" }}>{league?.season} CHAMPION</div>
+            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, letterSpacing: "0.16em", color: "#CFB991" }}>{seasonLabel} CHAMPION</div>
             <div style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 16 }}>{withOwner(champUser)}</div>
           </div>
         </div>
@@ -5909,7 +5929,7 @@ function buildSeasonRecapNarrative(summary, players, ownerDirectory) {
   return paragraphs;
 }
 
-function HistoryTab({ rostersById, usersById, standings, seasonHistory, superlatives, players, currentSeason }) {
+function HistoryTab({ rostersById, usersById, standings, seasonHistory, superlatives, players, currentSeason, data }) {
   // One summary per season, current one included.
   const seasonSummaries = useMemo(() => {
     const historical = (seasonHistory || []).map((s) => ({
@@ -5931,13 +5951,14 @@ function HistoryTab({ rostersById, usersById, standings, seasonHistory, superlat
     const currentHighGame = currentTopWeek
       ? { owner: usersById[rostersById[currentTopWeek.rosterId]?.owner_id], points: currentTopWeek.points, week: currentTopWeek.week }
       : null;
+    const done = superlatives?.currentResult; // set once this season's final is played
     const current = {
       season: currentSeason,
-      isComplete: false,
-      champion: null,
-      runnerUp: null,
-      third: null,
-      lastPlace: null,
+      isComplete: !!done,
+      champion: done?.champion || null,
+      runnerUp: done?.runnerUp || null,
+      third: done?.third || null,
+      lastPlace: done?.lastPlace || null,
       standings: standings || [],
       highGame: currentHighGame,
       bestPlayerGame: superlatives?.currentSeasonSuper?.bestPlayerGame || null,
@@ -6094,6 +6115,20 @@ function HistoryTab({ rostersById, usersById, standings, seasonHistory, superlat
           </div>
         </div>
       )}
+
+      {selectedSummary && data && (() => {
+        const past = (seasonHistory || []).find((s) => String(s.season) === String(selectedSummary.season));
+        if (past && past.bracket && past.bracket.length) {
+          return <PlayoffBracket data={data} archive={past} />;
+        }
+        // current season: show it here once the playoffs are underway
+        const isCurrent = String(selectedSummary.season) === String(currentSeason);
+        const pws = data.league?.settings?.playoff_week_start || 15;
+        if (isCurrent && (data.week >= pws || superlatives?.currentResult)) {
+          return <PlayoffBracket data={data} standings={standings} usersById={usersById} />;
+        }
+        return null;
+      })()}
     </div>
   );
 }
@@ -6389,7 +6424,7 @@ function useLeagueSuperlatives(data, standings, usersById) {
   return {
     championsByOwner, orderedTitles, currentSeasonSuper, ownerForRoster, wallOfShame,
     historyRows, ownerDirectory, allSeasonEntries, allTimeSuperlatives, mostTitles,
-    teamNameIn, gameRecords, mostCareerPoints,
+    teamNameIn, gameRecords, mostCareerPoints, currentResult,
   };
 }
 
