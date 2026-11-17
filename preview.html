@@ -6183,6 +6183,16 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
   // Season-specific spots (banners, podiums, wall of shame) keep the name
   // they had that year.
   const currentUser = (u) => (u && usersById[u.user_id]) || u;
+  // An empty banner hangs for the current season until its champion is crowned.
+  const showOpenBanner =
+    !!league?.season && seasonType !== "off" && !orderedTitles.some((t) => String(t.season) === String(league.season));
+  const openBannerNote = (() => {
+    const pws = league?.settings?.playoff_week_start;
+    const teams = league?.settings?.playoff_teams;
+    if (!pws || !teams) return "Hanging soon";
+    const finalWeek = pws + Math.ceil(Math.log2(teams)) - 1;
+    return `Decided Week ${finalWeek}`;
+  })();
 
   function playerLabel(pid) {
     const p = players?.[pid];
@@ -6236,7 +6246,7 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
   return (
     <div>
       {/* Champions banner strip: rafter banners */}
-      {orderedTitles.length > 0 && (
+      {(orderedTitles.length > 0 || showOpenBanner) && (
         <div style={{ marginBottom: 22 }}>
           <SectionLabel>Champions</SectionLabel>
           <div style={{ position: "relative", overflowX: "auto", paddingBottom: 6 }}>
@@ -6279,15 +6289,10 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
                             {teamName(s.champion)}
                           </div>
                           {realName && <div style={{ fontSize: 11, color: "rgba(255,255,255,0.7)", marginTop: 2 }}>{realName}</div>}
-                          {(record || s.runnerUp) && <div style={{ width: 56, height: 1, background: "rgba(207,185,145,0.6)", margin: "8px 0 6px" }} />}
+                          {record && <div style={{ width: 56, height: 1, background: "rgba(207,185,145,0.6)", margin: "8px 0 6px" }} />}
                           {record && (
                             <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10.5, color: "#CFB991" }}>
                               {record} · {pf} PF
-                            </div>
-                          )}
-                          {s.runnerUp && (
-                            <div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.75)", marginTop: 3 }}>
-                              def. {teamName(s.runnerUp)}
                             </div>
                           )}
                         </div>
@@ -6296,6 +6301,35 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
                   </div>
                 );
               })}
+              {showOpenBanner && (
+                <div className="banner-pennant" style={{ display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", width: 120, height: 16 }}>
+                    <div style={{ width: 2, background: "#CFB991", transform: "skewX(-14deg)" }} />
+                    <div style={{ width: 2, background: "#CFB991", transform: "skewX(14deg)" }} />
+                  </div>
+                  <div style={{ width: 186, height: 7, borderRadius: 4, background: "linear-gradient(180deg, #F0D77A, #DAAA00 55%, #8E6F3E)", position: "relative", zIndex: 2, boxShadow: "0 2px 3px rgba(0,0,0,0.25)" }} />
+                  <div className="rafter-banner" style={{ width: 172, marginTop: -2, padding: 2, background: "rgba(181,138,0,0.55)", clipPath: "polygon(0 0, 100% 0, 100% 88%, 50% 100%, 0 88%)" }}>
+                    <div style={{ position: "relative", background: "linear-gradient(180deg, #FFFFFF, #F4F1E8)", clipPath: "polygon(0 0, 100% 0, 100% 88%, 50% 100%, 0 88%)", padding: "12px 10px 34px" }}>
+                      <div style={{ position: "absolute", top: 5, left: 5, right: 5, bottom: 30, border: "1px dashed rgba(181,138,0,0.5)", borderBottom: "none", pointerEvents: "none" }} />
+                      <div style={{ position: "relative", display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center" }}>
+                        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, letterSpacing: "0.22em", color: "#8E6F3E" }}>LEAGUE CHAMPIONS</div>
+                        <div style={{ color: "#B58A00", fontSize: 10, letterSpacing: "0.3em", marginTop: 3 }}>☆☆☆</div>
+                        <div style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 36, lineHeight: 1, color: "transparent", WebkitTextStroke: "1.5px #B58A00", marginTop: 2 }}>
+                          {league?.season}
+                        </div>
+                        <div style={{ marginTop: 10, width: 52, height: 52, borderRadius: "50%", border: "2px dashed #B58A00", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Archivo Black', sans-serif", fontSize: 22, color: "#B58A00" }}>
+                          ?
+                        </div>
+                        <div style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 14, color: COLORS.turf, marginTop: 8 }}>Up for grabs</div>
+                        <div style={{ width: 56, height: 1, background: "rgba(181,138,0,0.5)", margin: "8px 0 6px" }} />
+                        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10.5, color: COLORS.muted }}>
+                          {openBannerNote}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
