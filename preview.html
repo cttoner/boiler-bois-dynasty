@@ -216,6 +216,7 @@ textarea:hover, textarea:focus { border-color: #0E4D33; outline: none; }
   .rules-cols { grid-template-columns: minmax(0, 1fr) !important; gap: 0 !important; }
   .rules-glance { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
   .rules-glance > div:nth-child(n+4) { display: none; }
+  .rules-glance > div > div:last-child { font-size: 14px !important; white-space: nowrap; }
   .rules-scoring { grid-template-columns: minmax(0, 1fr) !important; gap: 4px !important; }
   .site-nav { display: none !important; }
   .rail-strip { margin-bottom: 8px; }
@@ -7570,7 +7571,7 @@ function RulesTab({ league, data, standings }) {
     ["Bench", bench],
     ...(settings.reserve_slots ? [["IR spots", settings.reserve_slots, `Eligible: ${irEligible}`]] : []),
     ...(settings.taxi_slots
-      ? [["Taxi squad", settings.taxi_slots, `Players in their first ${settings.taxi_years || 1} ${settings.taxi_years === 1 ? "season" : "seasons"}${settings.taxi_allow_vets ? ", veterans allowed" : ""}${settings.taxi_deadline ? `. Moves locked after Week ${settings.taxi_deadline}` : ""}`]]
+      ? [["Taxi squad", settings.taxi_slots, `${settings.taxi_allow_vets && (settings.taxi_years || 1) > 1 ? `Players in their first ${settings.taxi_years} seasons` : "Rookies only"}${settings.taxi_deadline ? `. Moves locked after Week ${settings.taxi_deadline}` : ""}`]]
       : []),
   ];
 

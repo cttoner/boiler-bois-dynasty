@@ -157,6 +157,8 @@ textarea:hover, textarea:focus { border-color: #0E4D33; outline: none; }
 .site-nav::-webkit-scrollbar { display: none; }
 .mobile-only { display: none !important; }
 .bottom-nav { display: none; }
+.rule-head { all: unset; display: flex; justify-content: space-between; align-items: center; width: 100%; margin-bottom: 6px;
+  font-family: 'IBM Plex Mono', monospace; font-size: 12px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: #0E4D33; }
 .home-super-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 10px; }
 @media (max-width: 640px) {
   .mobile-only { display: block !important; }
@@ -206,6 +208,16 @@ textarea:hover, textarea:focus { border-color: #0E4D33; outline: none; }
   .rafter-scale { zoom: 0.8; }
   .m-folded > .m-fold-body { display: none; }
   .bottom-nav { display: block; }
+  .rule-head { cursor: pointer; background: #FFFFFF; border: 1px solid rgba(0,0,0,0.14); border-left: 3px solid #0E4D33; border-radius: 8px; padding: 12px 14px; margin-bottom: 0; box-sizing: border-box; }
+  .rule-sec.open .rule-head { border-radius: 8px 8px 0 0; }
+  .rule-sec:not(.open) .rule-body { display: none; }
+  .rule-sec { margin-bottom: 8px !important; }
+  .rule-caret { font-size: 18px; line-height: 1; }
+  .rules-cols { grid-template-columns: minmax(0, 1fr) !important; gap: 0 !important; }
+  .rules-glance { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
+  .rules-glance > div:nth-child(n+4) { display: none; }
+  .rules-glance > div > div:last-child { font-size: 14px !important; white-space: nowrap; }
+  .rules-scoring { grid-template-columns: minmax(0, 1fr) !important; gap: 4px !important; }
   .site-nav { display: none !important; }
   .rail-strip { margin-bottom: 8px; }
   body { padding-bottom: calc(68px + env(safe-area-inset-bottom)); }
@@ -1516,7 +1528,7 @@ function App() {
             rostersById={rostersById}
           />
         )}
-        {tab === "rules" && <RulesTab league={data.league} />}
+        {tab === "rules" && <RulesTab league={data.league} data={data} standings={standings} />}
         {tab === "standings" && (
           <StandingsTab
             standings={standings}
@@ -7419,7 +7431,8 @@ const SCORING_LABELS = {
   pts_allow_35p: "35+ pts allowed",
   xpm: "Extra point made", xpmiss: "Extra point missed",
   fgm_0_19: "FG made 0-19 yd", fgm_20_29: "FG made 20-29 yd", fgm_30_39: "FG made 30-39 yd",
-  fgm_40_49: "FG made 40-49 yd", fgm_50p: "FG made 50+ yd", fgmiss: "FG missed",
+  fgm_40_49: "FG made 40-49 yd", fgm_50p: "FG made 50+ yd", fgm_50_59: "FG made 50-59 yd", fgm_60p: "FG made 60+ yd",
+  fgmiss: "FG missed",
   kr_yd: "Kick return yard", pr_yd: "Punt return yard",
 };
 
@@ -7456,103 +7469,246 @@ function humanizeKey(key) {
   return key.split("_").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
 }
 
-const WAIVER_TYPE_LABELS = { 0: "Rolling waiver priority", 1: "FAAB", 2: "Reverse standings priority" };
+// Sleeper: 0 = rolling, 1 = reverse standings, 2 = FAAB
+const WAIVER_TYPE_LABELS = { 0: "Rolling waiver priority", 1: "Reverse standings priority", 2: "FAAB" };
 const LEAGUE_TYPE_LABELS = { 0: "Redraft", 1: "Keeper", 2: "Dynasty" };
-const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+// Sleeper counts waiver days from Monday (2 = Wednesday, confirmed against
+// when this league's claims actually processed).
+const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
-function RulesTab({ league }) {
+// League bylaws that aren't Sleeper settings. Edit here when they change.
+const LEAGUE_BYLAWS = {
+  duesDue: "Paid before the season starts",
+  firstPickPunishment: {
+    rule: "The 1.01 rookie pick comes with a price: whoever lands it has to complete the league punishment before it's theirs.",
+    history: [{ season: "2025", what: "Hot chip challenge" }],
+    current: "TBD",
+  },
+};
+
+// Logical row order inside each scoring group.
+const SCORING_GROUPS = [
+  { title: "Passing", keys: ["pass_yd", "pass_td", "pass_int", "pass_2pt", "pass_cmp", "pass_inc", "pass_td_40p", "pass_td_50p"] },
+  { title: "Rushing & receiving", keys: ["rush_yd", "rush_td", "rush_2pt", "rush_att", "rush_td_40p", "rush_td_50p", "rec", "rec_yd", "rec_td", "rec_2pt", "rec_td_40p", "rec_td_50p", "bonus_rec_rb", "bonus_rec_wr", "bonus_rec_te"] },
+  { title: "Turnovers & returns", keys: ["fum_lost", "fum_rec_td", "st_td", "st_fum_rec", "st_ff", "kr_yd", "pr_yd"] },
+  { title: "Kicking", keys: ["xpm", "xpmiss", "fgm_0_19", "fgm_20_29", "fgm_30_39", "fgm_40_49", "fgm_50p", "fgm_50_59", "fgm_60p", "fgmiss"], needs: ["K"] },
+  { title: "Defense", keys: ["pts_allow_0", "pts_allow_1_6", "pts_allow_7_13", "pts_allow_14_20", "pts_allow_21_27", "pts_allow_28_34", "pts_allow_35p", "sack", "int", "fum_rec", "ff", "safe", "blk_kick", "def_td", "def_st_td", "def_st_fum_rec", "def_st_ff", "def_2pt"], needs: ["DEF", "DL", "LB", "DB", "IDP_FLEX"] },
+];
+
+function scoringValue(key, v) {
+  if (/_yd$/.test(key) && Math.abs(v) < 1) {
+    const per = Math.round(1 / Math.abs(v));
+    return `${v < 0 ? "-" : ""}1 pt / ${per} yds`;
+  }
+  const n = Number.isInteger(v) ? v : Number(v.toFixed(2));
+  return `${n > 0 ? "+" : ""}${n}`;
+}
+
+function RuleRows({ rows }) {
+  return (
+    <div>
+      {rows.map(([label, value, note], i) => (
+        <div key={label} style={{ display: "flex", alignItems: "baseline", gap: 12, padding: "8px 0", borderTop: i ? `1px solid ${COLORS.hairline}` : "none" }}>
+          <div style={{ flex: "1 1 55%", fontSize: 13, color: COLORS.muted }}>
+            {label}
+            {note && <div style={{ fontSize: 11, color: COLORS.muted, opacity: 0.85, marginTop: 2 }}>{note}</div>}
+          </div>
+          <div style={{ flex: "1 1 45%", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, fontWeight: 600, color: COLORS.turf }}>{value}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// A section that's always open on desktop and tap-to-open on phones.
+function RuleSection({ title, accent, children, defaultOpen }) {
+  const [open, setOpen] = useState(!!defaultOpen);
+  return (
+    <div className={`rule-sec${open ? " open" : ""}`} style={{ marginBottom: 14 }}>
+      <button className="rule-head" onClick={() => setOpen((o) => !o)}>
+        <span>{title}</span>
+        <span className="mobile-only rule-caret">{open ? "−" : "+"}</span>
+      </button>
+      <div className="rule-body">
+        <Card style={{ borderLeft: `3px solid ${accent || COLORS.turf}`, padding: "6px 14px" }}>{children}</Card>
+      </div>
+    </div>
+  );
+}
+
+function RulesTab({ league, data, standings }) {
+  const settings = league?.settings || {};
+  const scoring = league?.scoring_settings || {};
   const positions = league?.roster_positions || [];
+  const teams = settings.num_teams || (data?.rosters || []).length || 12;
+  const pws = settings.playoff_week_start || 15;
+  const startWeek = settings.start_week || 1;
+  const playoffTeams = settings.playoff_teams || 6;
+  const rounds = Math.ceil(Math.log2(playoffTeams));
+  const finalWeek = pws + rounds * (settings.playoff_round_type === 1 ? 2 : 1) - 1;
+  const divisionCount = settings.divisions > 1 ? settings.divisions : 0;
+  const byes = playoffTeams === 6 ? 2 : 0;
+  const pot = DUES.entryFee * teams;
+
+  // lineup
   const starterCounts = {};
-  let benchCount = 0;
-  positions.forEach((p) => {
-    if (p === "BN") { benchCount++; return; }
-    starterCounts[p] = (starterCounts[p] || 0) + 1;
+  let bench = 0;
+  positions.forEach((p) => { if (p === "BN") bench++; else starterCounts[p] = (starterCounts[p] || 0) + 1; });
+  const SLOT_NOTES = { FLEX: "RB / WR / TE", SUPER_FLEX: "QB / RB / WR / TE", REC_FLEX: "WR / TE", WRRB_FLEX: "WR / RB" };
+  const lineupOrder = ["QB", "RB", "WR", "TE", "FLEX", "WRRB_FLEX", "REC_FLEX", "SUPER_FLEX", "K", "DEF"];
+  const lineupRows = [
+    ...lineupOrder.filter((p) => starterCounts[p]).map((p) => [POSITION_LABELS[p] || p, starterCounts[p], SLOT_NOTES[p]]),
+    ...Object.keys(starterCounts).filter((p) => !lineupOrder.includes(p)).map((p) => [POSITION_LABELS[p] || p, starterCounts[p]]),
+  ];
+  const irEligible = [
+    "IR",
+    settings.reserve_allow_out ? "Out" : null,
+    settings.reserve_allow_doubtful ? "Doubtful" : null,
+    settings.reserve_allow_sus ? "Suspended" : null,
+    settings.reserve_allow_na ? "NA" : null,
+  ].filter(Boolean).join(", ");
+  const rosterRows = [
+    ["Bench", bench],
+    ...(settings.reserve_slots ? [["IR spots", settings.reserve_slots, `Eligible: ${irEligible}`]] : []),
+    ...(settings.taxi_slots
+      ? [["Taxi squad", settings.taxi_slots, `${settings.taxi_allow_vets && (settings.taxi_years || 1) > 1 ? `Players in their first ${settings.taxi_years} seasons` : "Rookies only"}${settings.taxi_deadline ? `. Moves locked after Week ${settings.taxi_deadline}` : ""}`]]
+      : []),
+  ];
+
+  // divisions from current rosters, in standings order
+  const usersById = Object.fromEntries((data?.users || []).map((u) => [u.user_id, u]));
+  const divisions = {};
+  (standings || []).forEach((st) => {
+    const r = (data?.rosters || []).find((x) => x.roster_id === st.rosterId);
+    const d = r?.settings?.division;
+    if (d == null) return;
+    (divisions[d] = divisions[d] || []).push(usersById[r.owner_id]);
   });
 
-  const scoring = league?.scoring_settings || {};
+  // rookie draft (current season, rookies-only draft when Sleeper marks one)
+  const draftRounds = data?.draftRounds || settings.draft_rounds;
+
+  const waiverType = settings.waiver_budget > 0 ? 2 : settings.waiver_type;
+  const waiverRows = [
+    ["Type", waiverType === 2 ? `FAAB, $${settings.waiver_budget} budget` : WAIVER_TYPE_LABELS[waiverType] || "Waivers"],
+    ...(settings.waiver_day_of_week !== undefined ? [["Claims process", WEEKDAYS[settings.waiver_day_of_week] || "-"]] : []),
+    ...(settings.waiver_clear_days ? [["Dropped players", `On waivers for ${settings.waiver_clear_days} days`]] : []),
+    ["Free agents", settings.disable_adds ? "Adds disabled" : "First come, first served after waivers clear"],
+  ];
+  const tradeRows = [
+    ["Trade deadline", settings.trade_deadline ? `Week ${settings.trade_deadline}` : "None"],
+    ["Draft picks", settings.pick_trading ? "Tradable" : "Not tradable"],
+    ...(settings.veto_votes_needed ? [["Veto", `${settings.veto_votes_needed} votes overturns a trade`]] : []),
+    ["Review period", settings.trade_review_days ? `${settings.trade_review_days} days` : "None, trades process right away"],
+  ];
+
+  const relevantGroups = SCORING_GROUPS
+    .filter((g) => !g.needs || g.needs.some((p) => positions.includes(p)))
+    .map((g) => ({ ...g, rows: g.keys.filter((k) => scoring[k]).map((k) => [SCORING_LABELS[k] || humanizeKey(k), scoringValue(k, scoring[k])]) }))
+    .filter((g) => g.rows.length);
   const rec = scoring.rec;
-  const scoringType = rec === 1 ? "Full PPR" : rec === 0.5 ? "Half PPR" : rec === 0 ? "Standard (no PPR)" : rec !== undefined ? `${rec} pt / reception` : "-";
+  const scoringType = rec === 1 ? "Full PPR" : rec === 0.5 ? "Half PPR" : rec === 0 ? "Standard" : rec ? `${rec} PPR` : "-";
 
-  const scoringByCategory = useMemo(() => {
-    const groups = {};
-    Object.entries(scoring)
-      .filter(([, v]) => v !== undefined && v !== null && v !== 0)
-      .forEach(([key, v]) => {
-        const cat = SCORING_CATEGORIES[key] || "Other";
-        if (!groups[cat]) groups[cat] = [];
-        groups[cat].push([SCORING_LABELS[key] || humanizeKey(key), v]);
-      });
-    return SCORING_CATEGORY_ORDER
-      .filter((cat) => groups[cat] && groups[cat].length > 0)
-      .map((cat) => ({ category: cat, rows: groups[cat] }));
-  }, [scoring]);
-
-  const settings = league?.settings || {};
-  const waiverLabel = settings.waiver_budget > 0
-    ? `FAAB budget ($${settings.waiver_budget})`
-    : (WAIVER_TYPE_LABELS[settings.waiver_type] || "Rolling waiver priority");
-  const tradeDeadline = settings.trade_deadline
-    ? `Week ${settings.trade_deadline}`
-    : "No deadline set";
-
-  const rosterRows = [
-    ...Object.entries(starterCounts).map(([pos, count]) => [POSITION_LABELS[pos] || pos, count]),
-    ["Bench", benchCount],
-    ...(settings.taxi_slots ? [["Taxi squad", settings.taxi_slots]] : []),
-    ...(settings.reserve_slots ? [["IR slots", settings.reserve_slots]] : []),
-  ];
-
-  const generalRows = [
-    ["League type", LEAGUE_TYPE_LABELS[settings.type] ?? "Dynasty"],
-    ["League size", settings.num_teams ?? "-"],
-    ["Waivers", waiverLabel],
-    ...(settings.waiver_day_of_week !== undefined ? [["Waiver clear day", WEEKDAYS[settings.waiver_day_of_week] ?? settings.waiver_day_of_week]] : []),
-    ...(settings.waiver_clear_days ? [["Waiver clear days", settings.waiver_clear_days]] : []),
-    ["Trade deadline", tradeDeadline],
-    ...(settings.veto_votes_needed ? [["Trade veto votes needed", settings.veto_votes_needed]] : []),
-    ...(settings.disable_adds !== undefined ? [["Free agent adds", settings.disable_adds ? "Disabled" : "Enabled"]] : []),
-    ...(settings.best_ball ? [["Best ball", "Yes"]] : []),
-    ...(settings.taxi_deadline ? [["Taxi deadline", `Week ${settings.taxi_deadline}`]] : []),
-  ];
-
-  const playoffRows = [
-    ["Playoff teams", settings.playoff_teams ?? "-"],
-    ["Playoffs start", settings.playoff_week_start ? `Week ${settings.playoff_week_start}` : "-"],
-    ...(settings.playoff_round_type !== undefined ? [["Championship format", settings.playoff_round_type === 1 ? "2-week championship" : "1 week per round"]] : []),
-    ...(settings.playoff_seed_type !== undefined ? [["Reseeding", settings.playoff_seed_type ? "Reseed each round" : "Bracket set at start"]] : []),
+  const glance = [
+    ["Pot", `$${pot}`],
+    ["Scoring", scoringType],
+    ["Playoffs", `Wk ${pws}-${finalWeek}`],
+    ["Trade deadline", settings.trade_deadline ? `Wk ${settings.trade_deadline}` : "None"],
+    ["Waivers", settings.waiver_day_of_week !== undefined ? WEEKDAYS[settings.waiver_day_of_week] : "-"],
   ];
 
   return (
     <div>
-      <BalancedGrid
-        items={[
-          {
-            key: "dues",
-            node: (
-              <InfoTable
-                title="Dues & payout"
-                rows={[
-                  ["Entry fee", `$${DUES.entryFee} / manager`],
-                  ...DUES.payout.map((p) => [`${p.place} place`, `$${p.amount}`]),
-                ]}
-                note={`${DUES.note}. Adjust anytime the pot size changes.`}
-              />
-            ),
-          },
-          ...scoringByCategory.map(({ category, rows }) => ({
-            key: category,
-            node: <InfoTable title={`Scoring: ${category}`} rows={rows} accent={CATEGORY_ACCENTS[category]} />,
-          })),
-          { key: "roster", node: <InfoTable title="Roster composition" rows={rosterRows} accent={COLORS.turfLight} /> },
-          { key: "general", node: <InfoTable title="General settings" rows={generalRows} /> },
-          { key: "playoff", node: <InfoTable title="Playoff settings" rows={playoffRows} accent={COLORS.goldDeep} /> },
-        ]}
-      />
-
-      <div style={{ marginTop: 16, fontSize: 11, color: COLORS.muted }}>
-        League is set to {scoringType.toLowerCase()}. Every nonzero scoring rule from Sleeper is broken out above, plus
-        everything else pulled live from your league settings. Change it in Sleeper and it'll update here automatically.
+      <SectionLabel>Rules</SectionLabel>
+      <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
+        Everything that decides who gets paid. Settings pull live from Sleeper, so this page updates itself if anything changes.
       </div>
+
+      <div className="rules-glance" style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 8, marginBottom: 18 }}>
+        {glance.map(([k, v]) => (
+          <Card key={k} style={{ padding: "10px 12px", textAlign: "center", borderTop: "3px solid #DAAA00" }}>
+            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, letterSpacing: "0.08em", textTransform: "uppercase", color: COLORS.muted }}>{k}</div>
+            <div style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 17, color: COLORS.turf, marginTop: 2 }}>{v}</div>
+          </Card>
+        ))}
+      </div>
+
+      <div className="rules-cols" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 16, alignItems: "start" }}>
+        <div>
+          <RuleSection title="Dues & payout" accent="#DAAA00" defaultOpen>
+            <RuleRows rows={[
+              ["Entry fee", `$${DUES.entryFee} per manager`, LEAGUE_BYLAWS.duesDue],
+              ["Pot", `$${pot}`, `${teams} managers`],
+              ...DUES.payout.map((p) => [`${p.place} place`, `$${p.amount}`]),
+            ]} />
+          </RuleSection>
+
+          <RuleSection title="Season & playoffs" accent={COLORS.turf}>
+            <RuleRows rows={[
+              ["Regular season", `Weeks ${startWeek}-${pws - 1}`],
+              ["Playoffs", `${playoffTeams} teams, Weeks ${pws}-${finalWeek}`, settings.playoff_round_type === 1 ? "Two-week championship" : "One week per round"],
+              ...(divisionCount
+                ? [["Seeds 1-" + divisionCount, "Division winners", byes === divisionCount ? "Both get a first-round bye" : null]]
+                : byes ? [["Byes", `Top ${byes} seeds`]] : []),
+              [divisionCount ? `Seeds ${divisionCount + 1}-${playoffTeams}` : "Seeding", "Best remaining records"],
+              ["Tiebreaker", "Points for"],
+              ["Bracket", settings.playoff_seed_type ? "Reseeds each round" : "Set at the start, no reseeding"],
+              ["Also played", "3rd and 5th place games"],
+            ]} />
+          </RuleSection>
+
+          {divisionCount > 0 && Object.keys(divisions).length > 0 && (
+            <RuleSection title="Divisions" accent={COLORS.turfLight}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, padding: "8px 0" }}>
+                {Object.keys(divisions).sort().map((d) => (
+                  <div key={d}>
+                    <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, fontWeight: 700, color: COLORS.turf, marginBottom: 6 }}>DIVISION {d}</div>
+                    {divisions[d].map((u, i) => (
+                      <div key={u?.user_id || i} style={{ display: "flex", alignItems: "center", gap: 7, padding: "4px 0", fontSize: 12.5 }}>
+                        <Crest name={teamName(u)} logo={avatarUrl(u)} size={18} />
+                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{teamName(u)}</span>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </RuleSection>
+          )}
+        </div>
+
+        <div>
+          <RuleSection title="Lineup & roster" accent={COLORS.turfLight}>
+            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10.5, letterSpacing: "0.08em", color: COLORS.muted, paddingTop: 8 }}>STARTERS</div>
+            <RuleRows rows={lineupRows} />
+            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10.5, letterSpacing: "0.08em", color: COLORS.muted, paddingTop: 10, borderTop: `1px solid ${COLORS.hairline}` }}>RESERVES</div>
+            <RuleRows rows={rosterRows} />
+          </RuleSection>
+
+          <RuleSection title="Waivers & trades" accent={COLORS.goldDim}>
+            <RuleRows rows={[...waiverRows, ...tradeRows]} />
+          </RuleSection>
+
+          <RuleSection title="Rookie draft" accent={COLORS.pylon}>
+            <RuleRows rows={[
+              ["Format", `${draftRounds || 3} rounds, linear`],
+              ["The 1.01 pick", "Punishment first", LEAGUE_BYLAWS.firstPickPunishment.rule],
+              ...LEAGUE_BYLAWS.firstPickPunishment.history.map((h) => [`${h.season} punishment`, h.what]),
+              [`${league?.season || "This year"}'s punishment`, LEAGUE_BYLAWS.firstPickPunishment.current],
+            ]} />
+          </RuleSection>
+        </div>
+      </div>
+
+      <RuleSection title={`Scoring · ${scoringType}`} accent={COLORS.turf}>
+        <div className="rules-scoring" style={{ display: "grid", gridTemplateColumns: `repeat(${Math.min(relevantGroups.length, 4)}, minmax(0, 1fr))`, gap: 20, padding: "6px 0" }}>
+          {relevantGroups.map((g) => (
+            <div key={g.title}>
+              <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10.5, letterSpacing: "0.08em", textTransform: "uppercase", color: COLORS.muted, paddingTop: 6 }}>{g.title}</div>
+              <RuleRows rows={g.rows} />
+            </div>
+          ))}
+        </div>
+      </RuleSection>
     </div>
   );
 }
