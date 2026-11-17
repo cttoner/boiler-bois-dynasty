@@ -59,13 +59,13 @@ button { transition: opacity 0.15s ease, background-color 0.15s ease, border-col
 button:hover { opacity: 0.8; }
 button:active { opacity: 0.65; }
 select { transition: border-color 0.15s ease; }
-select:hover { border-color: #1C1C1C; }
+select:hover { border-color: #0E4D33; }
 input[type="text"] { transition: border-color 0.15s ease; }
-input[type="text"]:hover, input[type="text"]:focus { border-color: #1C1C1C; outline: none; }
+input[type="text"]:hover, input[type="text"]:focus { border-color: #0E4D33; outline: none; }
 textarea { transition: border-color 0.15s ease; }
-textarea:hover, textarea:focus { border-color: #1C1C1C; outline: none; }
+textarea:hover, textarea:focus { border-color: #0E4D33; outline: none; }
 .sortable-th { transition: color 0.15s ease; }
-.sortable-th:hover { color: #1C1C1C !important; }
+.sortable-th:hover { color: #0E4D33 !important; }
 @keyframes bannerSway {
   0%, 100% { transform: rotate(-2.5deg); }
   50% { transform: rotate(2.5deg); }
@@ -172,7 +172,8 @@ function TrainSvg() {
 
 const COLORS = {
   bg: "#FAF9F6",
-  bg2: "#000000",
+  bg2: "#0E4D33",
+  pylon: "#FF6B00",
   surface: "#FFFFFF",
   surfaceLight: "#F2F0EB",
   gold: "#B58A00",
@@ -184,9 +185,9 @@ const COLORS = {
   leather: "#8E6F3E",
   leatherDeep: "#5E4A29",
   leatherTint: "#F3ECDD",
-  turf: "#1C1C1C",
-  turfLight: "#555960",
-  turfDeep: "#000000",
+  turf: "#0E4D33",
+  turfLight: "#3F7A63",
+  turfDeep: "#0A3924",
   turfTint: "#F8EFD2",
   orangeTint: "#FBF1D3",
   bone: "#1A1A1A",
@@ -202,11 +203,11 @@ const COLORS = {
 // variety without introducing new hues.
 const POSITION_COLORS = {
   QB: { bg: "#FFE6D2", fg: "#B8460D" },
-  RB: { bg: "#F8EFD2", fg: "#1C1C1C" },
+  RB: { bg: "#E1F0E7", fg: "#0E4D33" },
   WR: { bg: "#FFF3D6", fg: "#8A6A00" },
   TE: { bg: "#F3ECDD", fg: "#5E4A29" },
-  FLEX: { bg: "#F2F0EB", fg: "#555960" },
-  SUPER_FLEX: { bg: "#F2F0EB", fg: "#555960" },
+  FLEX: { bg: "#F2F0EB", fg: "#3F7A63" },
+  SUPER_FLEX: { bg: "#F2F0EB", fg: "#3F7A63" },
   K: { bg: "#F3ECDD", fg: "#5E4A29" },
   DEF: { bg: "#FFE6D2", fg: "#B8460D" },
 };
@@ -743,7 +744,7 @@ function seasonPhaseText(seasonType, week) {
 }
 
 function seasonPhaseColor(seasonType) {
-  if (seasonType === "regular") return { bg: "#DAAA00", fg: "#000000" };
+  if (seasonType === "regular") return { bg: "#FF6B00", fg: "#FFFFFF" };
   if (seasonType === "post") return { bg: "#CFB991", fg: "#000000" };
   if (seasonType === "pre") return { bg: "#8E6F3E", fg: "#FFFFFF" };
   return { bg: "rgba(255,255,255,0.16)", fg: "rgba(255,255,255,0.85)" };
@@ -1299,7 +1300,10 @@ function App() {
         className="site-header"
         style={{
           borderBottom: `1px solid ${COLORS.hairline}`,
-          background: COLORS.bg2,
+          borderTop: "4px solid #DAAA00",
+          backgroundColor: COLORS.bg2,
+          backgroundImage:
+            "repeating-linear-gradient(90deg, rgba(255,255,255,0.05) 0 2px, transparent 2px 90px), repeating-linear-gradient(90deg, rgba(0,0,0,0.07) 0 180px, transparent 180px 360px)",
           padding: "16px 28px 0",
         }}
       >
@@ -1373,7 +1377,8 @@ function App() {
                   textTransform: "uppercase",
                   background: active ? COLORS.surface : "transparent",
                   color: active ? COLORS.turf : COLORS.onTurfMuted,
-                  border: `1px solid ${active ? COLORS.gold : "transparent"}`,
+                  border: `1px solid ${active ? COLORS.pylon : "transparent"}`,
+                  borderTop: `3px solid ${active ? COLORS.pylon : "transparent"}`,
                   borderBottom: "none",
                   borderRadius: "6px 6px 0 0",
                   padding: "9px 16px",
@@ -1475,7 +1480,10 @@ function App() {
           BOILER UP! 🚂
         </div>
         <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: "rgba(255,255,255,0.6)", marginTop: 4 }}>
-          Boiler Dynasty · built by Boilermakers
+          Boiler Dynasty · built by {(() => {
+            const builder = (data.users || []).find((u) => (u.display_name || "").toLowerCase() === "cttoner");
+            return builder ? withOwner(builder) : "C. Toner";
+          })()}
         </div>
       </div>
     </div>
@@ -1774,7 +1782,7 @@ function StandingsTab({ standings, playoffTeams, data, usersById }) {
             r.isPlayoffPosition ? (
               <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "flex-end", gap: 6, whiteSpace: "nowrap", color: COLORS.turf, fontWeight: 600 }}>
                 {r.hasBye ? (
-                  <span style={{ fontSize: 10, fontWeight: 700, color: COLORS.gold, background: COLORS.orangeTint, borderRadius: 999, padding: "1px 6px" }}>BYE</span>
+                  <span style={{ fontSize: 10, fontWeight: 700, color: "#FFFFFF", background: COLORS.pylon, borderRadius: 999, padding: "1px 6px" }}>BYE</span>
                 ) : null}
                 <span style={{ minWidth: 14, textAlign: "right" }}>{r.seed}</span>
               </span>
@@ -3142,7 +3150,7 @@ function buildRecapImageCanvas({ leagueName, season, week, recap, ownerFor, play
   if (recap.stud?.length > 0) cards.push({ label: "STUD OF THE WEEK", value: `${fmt(recap.stud[0].points)} PTS`, lines: playersLines(recap.stud), accent: "#B58A00" });
   if (recap.dud?.length > 0) cards.push({ label: "DUD OF THE WEEK", value: `${fmt(recap.dud[0].points)} PTS`, lines: playersLines(recap.dud), accent: "#C0392B" });
   if (recap.blowout?.length > 0) cards.push({ label: "BIGGEST BLOWOUT", value: `${fmt(recap.blowout[0].margin)} PT MARGIN`, lines: pairsLines(recap.blowout), accent: "#8E6F3E" });
-  if (recap.closest?.length > 0) cards.push({ label: "CLOSEST GAME", value: `${fmt(recap.closest[0].margin)} PT MARGIN`, lines: pairsLines(recap.closest), accent: "#555960" });
+  if (recap.closest?.length > 0) cards.push({ label: "CLOSEST GAME", value: `${fmt(recap.closest[0].margin)} PT MARGIN`, lines: pairsLines(recap.closest), accent: "#3F7A63" });
   if (recap.highScore?.length > 0) cards.push({ label: "HIGH SCORE", value: `${fmt(recap.highScore[0].points)} PTS`, lines: teamsLines(recap.highScore), accent: "#DAAA00" });
   if (recap.lowScore?.length > 0) cards.push({ label: "LOW SCORE", value: `${fmt(recap.lowScore[0].points)} PTS`, lines: teamsLines(recap.lowScore), accent: "#6F727B" });
   if (recap.benchStud?.length > 0 && recap.benchStud[0].points > 0) cards.push({ label: "SHOULDA STARTED", value: `${fmt(recap.benchStud[0].points)} PTS`, lines: playersLines(recap.benchStud), accent: "#B8860B" });
@@ -3174,7 +3182,7 @@ function buildRecapImageCanvas({ leagueName, season, week, recap, ownerFor, play
   ctx.fillStyle = "#FAF9F6";
   ctx.fillRect(0, 0, W, H);
 
-  ctx.fillStyle = "#1C1C1C";
+  ctx.fillStyle = "#0E4D33";
   ctx.fillRect(0, 0, W, headerH);
   ctx.fillStyle = "#DAAA00";
   ctx.font = "700 22px Georgia, serif";
@@ -3206,7 +3214,7 @@ function buildRecapImageCanvas({ leagueName, season, week, recap, ownerFor, play
       ctx.font = "700 13px Georgia, serif";
       ctx.fillText(fitText(ctx, c.label, colW - 32), x + 20, y + 28);
 
-      ctx.fillStyle = "#1C1C1C";
+      ctx.fillStyle = "#0E4D33";
       ctx.font = "800 26px Georgia, serif";
       ctx.fillText(fitText(ctx, c.value, colW - 32), x + 20, y + 64);
 
@@ -6499,7 +6507,7 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
   );
 }
 
-const SUPERLATIVE_ACCENTS = ["#B58A00", "#1C1C1C", "#B8860B", "#8E6F3E", "#555960", "#9D7A2E", "#5E4A29", "#8E6F3E"];
+const SUPERLATIVE_ACCENTS = ["#B58A00", "#0E4D33", "#E35F00", "#1A1A1A", "#8E6F3E", "#3F7A63", "#B58A00", "#0E4D33"];
 
 function SuperlativeCard({ label, value, user, accent, sublabel, note }) {
   return (
@@ -6678,7 +6686,7 @@ const SCORING_CATEGORIES = {
 const SCORING_CATEGORY_ORDER = ["Passing", "Rushing & receiving", "Kicking", "Defense & special teams", "Other"];
 const CATEGORY_ACCENTS = {
   "Passing": "#9D7A2E",
-  "Rushing & receiving": "#1C1C1C",
+  "Rushing & receiving": "#0E4D33",
   "Kicking": "#B8860B",
   "Defense & special teams": "#5E4A29",
   "Other": "#6F727B",
