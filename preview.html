@@ -1571,20 +1571,47 @@ function StandingsTab({ standings, playoffTeams, data, usersById }) {
   const streaks = useMemo(() => computeStreaks(weekMatchups, rosters), [weekMatchups, rosters]);
   const expectedWins = useMemo(() => computeExpectedWins(weekMatchups), [weekMatchups]);
 
+  // Seeding as Sleeper does it: with divisions on, each division's leader
+  // takes the top seeds, then the best remaining records. Ties go to points
+  // for (standings are already sorted that way).
+  const divisionCount = data.league?.settings?.divisions > 1 ? data.league.settings.divisions : 0;
+  const byeCount = playoffTeams === 6 ? 2 : 0;
+  const seedInfo = useMemo(() => {
+    const divOf = Object.fromEntries((rosters || []).map((r) => [r.roster_id, r.settings?.division ?? null]));
+    let seeded = standings.map((s) => s.rosterId);
+    const leaders = new Set();
+    if (divisionCount) {
+      const seen = new Set();
+      standings.forEach((s) => {
+        const d = divOf[s.rosterId];
+        if (d != null && !seen.has(d)) { seen.add(d); leaders.add(s.rosterId); }
+      });
+      seeded = [...seeded.filter((id) => leaders.has(id)), ...seeded.filter((id) => !leaders.has(id))];
+    }
+    const seedOf = Object.fromEntries(seeded.map((id, i) => [id, i + 1]));
+    return { seedOf, divOf, leaders };
+  }, [standings, rosters, divisionCount]);
+
   const seasonRows = useMemo(() => {
     return standings.map((s, i) => {
       const picture = playoffPicture.all[i];
+      const seed = seedInfo.seedOf[s.rosterId];
+      const inPlayoffs = !!playoffTeams && seed <= playoffTeams;
       return {
         ...s,
-        rowBg: playoffTeams && i < playoffTeams ? COLORS.turfTint : "transparent",
-        isPlayoffPosition: playoffTeams && i < playoffTeams,
+        seed,
+        division: seedInfo.divOf[s.rosterId],
+        divLeader: seedInfo.leaders.has(s.rosterId),
+        hasBye: byeCount > 0 && seed <= byeCount,
+        rowBg: inPlayoffs ? COLORS.turfTint : "transparent",
+        isPlayoffPosition: inPlayoffs,
         gamesBack: picture ? picture.gamesBack : 0,
         streak: streaks[s.rosterId] || null,
         expectedWins: expectedWins[s.rosterId] || 0,
         luck: s.wins - (expectedWins[s.rosterId] || 0),
       };
     });
-  }, [standings, playoffTeams, playoffPicture, streaks, expectedWins]);
+  }, [standings, playoffTeams, playoffPicture, streaks, expectedWins, seedInfo, byeCount]);
 
   const allTimeStandings = useMemo(() => {
     const career = {};
@@ -1650,9 +1677,32 @@ function StandingsTab({ standings, playoffTeams, data, usersById }) {
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <Crest name={r.name} logo={r.avatar} size={24} />
           <span style={{ fontWeight: 600, color: r.isPlayoffPosition ? COLORS.turf : COLORS.bone }}>{r.displayName}</span>
+          {divisionCount && r.division ? (
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: COLORS.muted, border: `1px solid ${COLORS.hairline}`, borderRadius: 4, padding: "1px 5px" }}>
+              D{r.division}
+            </span>
+          ) : null}
         </div>
       ),
     },
+    ...(playoffTeams
+      ? [{
+          key: "seed",
+          label: "Seed",
+          accessor: (r) => -r.seed,
+          render: (r) =>
+            r.isPlayoffPosition ? (
+              <span style={{ whiteSpace: "nowrap", color: COLORS.turf, fontWeight: 600 }}>
+                {r.seed}
+                {r.hasBye ? (
+                  <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: COLORS.gold, background: COLORS.orangeTint, borderRadius: 999, padding: "1px 6px" }}>BYE</span>
+                ) : null}
+              </span>
+            ) : (
+              <span style={{ color: COLORS.muted }}>-</span>
+            ),
+        }]
+      : []),
     { key: "wins", label: "W", accessor: (r) => r.wins },
     { key: "losses", label: "L", accessor: (r) => r.losses },
     { key: "ties", label: "T", accessor: (r) => r.ties },
@@ -1767,8 +1817,10 @@ function StandingsTab({ standings, playoffTeams, data, usersById }) {
           {playoffTeams ? (
             <div style={{ fontSize: 11, color: COLORS.muted, marginTop: 8 }}>
               <span style={{ display: "inline-block", width: 10, height: 10, background: COLORS.turfTint, border: `1px solid ${COLORS.turf}`, borderRadius: 2, marginRight: 6, verticalAlign: "middle" }} />
-              Currently in playoff position (top {playoffTeams}). This stays tied to actual record even if you sort
-              by another column. Luck compares actual wins to how many teams you'd have beaten each week if everyone
+              {divisionCount
+                ? `Currently in playoff position (top ${playoffTeams} seeds). Each division's leader takes a top-${divisionCount} seed${byeCount === divisionCount ? " and a bye" : ""}, then the best remaining records fill in. D1 and D2 mark each team's division.`
+                : `Currently in playoff position (top ${playoffTeams}).`}{" "}
+              This stays tied to actual seeding even if you sort by another column. Luck compares actual wins to how many teams you'd have beaten each week if everyone
               played everyone, positive means your record is running ahead of your points, negative means it's not.
             </div>
           ) : null}
@@ -2220,7 +2272,7 @@ function PlayoffOdds({ data }) {
       <SectionLabel>Playoff odds</SectionLabel>
       <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
         {weeksLeft} {weeksLeft === 1 ? "week" : "weeks"} left (Weeks {remainingWeeks[0]}{weeksLeft > 1 ? `-${remainingWeeks[weeksLeft - 1]}` : ""}) and{" "}
-        {SIM_RUNS.toLocaleString()} simulated seasons using every team's real schedule and how they've actually scored.
+        {SIM_RUNS.toLocaleString()} simulated seasons using every team's real schedule and how they've actually scored.{" "}
         {divisionCount
           ? `Division winners take the top ${divisionCount} seeds${byes === divisionCount ? " and the byes" : ""}, then the best remaining records fill out the top ${playoffTeams}. Ties go to points for. `
           : `Top ${playoffTeams} make it${byes ? `, top ${byes} get the bye` : ""}. `}
