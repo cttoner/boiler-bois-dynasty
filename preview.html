@@ -416,7 +416,7 @@ function useLeagueData(leagueId) {
         guard++;
         try {
           const seasonLeague = await j(`${API}/league/${cursor}`);
-          chain.push({ leagueId: cursor, season: seasonLeague.season });
+          chain.push({ leagueId: cursor, season: seasonLeague.season, playoffWeekStart: seasonLeague.settings?.playoff_week_start });
           cursor = seasonLeague.previous_league_id;
         } catch (e) {
           cursor = null;
@@ -430,7 +430,7 @@ function useLeagueData(leagueId) {
       // no longer wipes out every older season behind it either, since
       // each season now succeeds or fails independently.
       const results = await Promise.all(
-        chain.map(async ({ leagueId, season }) => {
+        chain.map(async ({ leagueId, season, playoffWeekStart }) => {
           try {
             const [seasonUsers, seasonRosters] = await Promise.all([
               j(`${API}/league/${leagueId}/users`),
@@ -444,6 +444,7 @@ function useLeagueData(leagueId) {
             return {
               season,
               leagueId,
+              playoffWeekStart,
               users: seasonUsers,
               rosters: seasonRosters,
               trades: seasonTransactions.trades,
@@ -1771,6 +1772,7 @@ function StandingsTab({ standings, playoffTeams, data, usersById }) {
               played everyone, positive means your record is running ahead of your points, negative means it's not.
             </div>
           ) : null}
+          <PlayoffOdds data={data} />
         </div>
       ) : (
         <div>
@@ -2034,6 +2036,230 @@ function MatchupRow({ name, label, logo, score, leading, record }) {
       >
         {record || fmt(score)}
       </span>
+    </div>
+  );
+}
+
+
+// ---- Playoff odds ----
+// Monte Carlo sim of the rest of the regular season. Each team's weekly
+// score is drawn from a normal curve built off its own scores this season,
+// pulled a little toward the league average so one monster week doesn't
+// dominate. Seeding follows Sleeper's default: wins, then points for.
+const SIM_RUNS = 10000;
+
+function randNormal() {
+  let u = 0, v = 0;
+  while (u === 0) u = Math.random();
+  while (v === 0) v = Math.random();
+  return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+}
+
+function PlayoffOdds({ data }) {
+  const { league, rosters, users, week, seasonType, weekMatchups, matchups } = data;
+  const settings = league?.settings || {};
+  const playoffStart = settings.playoff_week_start || 15;
+  const playoffTeams = settings.playoff_teams || 6;
+  const byes = playoffTeams === 6 ? 2 : 0;
+  const remainingWeeks = useMemo(() => {
+    const out = [];
+    for (let w = week; w < playoffStart; w++) out.push(w);
+    return out;
+  }, [week, playoffStart]);
+
+  const [schedule, setSchedule] = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    if (seasonType !== "regular" || remainingWeeks.length === 0) return;
+    let cancelled = false;
+    Promise.all(
+      remainingWeeks.map((w) =>
+        w === week && matchups?.length
+          ? Promise.resolve(matchups)
+          : fetch(`${API}/league/${league?.league_id || LEAGUE_ID}/matchups/${w}`).then((r) => (r.ok ? r.json() : []))
+      )
+    )
+      .then((weeks) => {
+        if (cancelled) return;
+        const games = [];
+        weeks.forEach((ms, i) => {
+          const byId = {};
+          (ms || []).forEach((m) => {
+            if (m.matchup_id == null) return;
+            (byId[m.matchup_id] = byId[m.matchup_id] || []).push(m.roster_id);
+          });
+          Object.values(byId).forEach((pair) => {
+            if (pair.length === 2) games.push({ week: remainingWeeks[i], a: pair[0], b: pair[1] });
+          });
+        });
+        setSchedule(games);
+      })
+      .catch((e) => !cancelled && setError(e.message));
+    return () => { cancelled = true; };
+  }, [seasonType, remainingWeeks, league, week, matchups]);
+
+  const results = useMemo(() => {
+    if (!schedule || !rosters?.length) return null;
+    const byOwner = Object.fromEntries((users || []).map((u) => [u.user_id, u]));
+
+    // Score model per roster from completed weeks this season
+    const scores = {};
+    rosters.forEach((r) => { scores[r.roster_id] = []; });
+    Object.entries(weekMatchups || {}).forEach(([w, ms]) => {
+      if (Number(w) >= week) return;
+      (ms || []).forEach((m) => { if (m.points > 0 && scores[m.roster_id]) scores[m.roster_id].push(m.points); });
+    });
+    const all = Object.values(scores).flat();
+    const lgMean = all.length ? all.reduce((a, b) => a + b, 0) / all.length : 110;
+    const lgSd = all.length > 1 ? Math.sqrt(all.reduce((a, b) => a + (b - lgMean) ** 2, 0) / (all.length - 1)) : 25;
+    const SHRINK = 3; // games' worth of league-average prior
+    const model = {};
+    rosters.forEach((r) => {
+      const xs = scores[r.roster_id];
+      const n = xs.length;
+      const mean = n ? xs.reduce((a, b) => a + b, 0) / n : lgMean;
+      const sd = n > 1 ? Math.sqrt(xs.reduce((a, b) => a + (b - mean) ** 2, 0) / (n - 1)) : lgSd;
+      model[r.roster_id] = {
+        mean: (n * mean + SHRINK * lgMean) / (n + SHRINK),
+        sd: Math.max(12, (n * sd + SHRINK * lgSd) / (n + SHRINK)),
+      };
+    });
+
+    const base = rosters.map((r) => ({
+      id: r.roster_id,
+      wins: (r.settings?.wins ?? 0) + (r.settings?.ties ?? 0) * 0.5,
+      pf: (r.settings?.fpts ?? 0) + (r.settings?.fpts_decimal ?? 0) / 100,
+    }));
+    const tally = {};
+    base.forEach((t) => { tally[t.id] = { playoff: 0, bye: 0, first: 0, last: 0, wins: 0 }; });
+
+    const idx = Object.fromEntries(base.map((t, i) => [t.id, i]));
+    const wins = new Float64Array(base.length);
+    const pf = new Float64Array(base.length);
+    const order = base.map((_, i) => i);
+    for (let run = 0; run < SIM_RUNS; run++) {
+      base.forEach((t, i) => { wins[i] = t.wins; pf[i] = t.pf; });
+      for (const g of schedule) {
+        const ia = idx[g.a], ib = idx[g.b];
+        if (ia == null || ib == null) continue;
+        const ma = model[g.a], mb = model[g.b];
+        const sa = Math.max(0, ma.mean + ma.sd * randNormal());
+        const sb = Math.max(0, mb.mean + mb.sd * randNormal());
+        pf[ia] += sa; pf[ib] += sb;
+        if (sa > sb) wins[ia] += 1; else if (sb > sa) wins[ib] += 1; else { wins[ia] += 0.5; wins[ib] += 0.5; }
+      }
+      order.sort((x, y) => wins[y] - wins[x] || pf[y] - pf[x]);
+      order.forEach((ti, rank) => {
+        const t = tally[base[ti].id];
+        t.wins += wins[ti];
+        if (rank < playoffTeams) t.playoff++;
+        if (rank < byes) t.bye++;
+        if (rank === 0) t.first++;
+        if (rank === order.length - 1) t.last++;
+      });
+    }
+
+    return rosters
+      .map((r) => {
+        const t = tally[r.roster_id];
+        const u = byOwner[r.owner_id];
+        return {
+          rosterId: r.roster_id,
+          name: teamName(u),
+          displayName: withOwner(u),
+          avatar: avatarUrl(u),
+          record: `${r.settings?.wins ?? 0}-${r.settings?.losses ?? 0}${r.settings?.ties ? `-${r.settings.ties}` : ""}`,
+          projWins: t.wins / SIM_RUNS,
+          playoff: t.playoff / SIM_RUNS,
+          bye: t.bye / SIM_RUNS,
+          first: t.first / SIM_RUNS,
+          last: t.last / SIM_RUNS,
+          proj: model[r.roster_id].mean,
+        };
+      })
+      .sort((a, b) => b.playoff - a.playoff || b.bye - a.bye || b.projWins - a.projWins);
+  }, [schedule, rosters, users, weekMatchups, week, playoffTeams, byes]);
+
+  if (seasonType !== "regular" || remainingWeeks.length === 0) return null;
+
+  const pct = (x, kind) => {
+    if (x >= 1) return kind === "last" ? "Doomed" : "Lock";
+    if (x <= 0) return kind === "playoff" ? "Out" : "-";
+    if (x > 0.995) return ">99%";
+    if (x < 0.005) return "<1%";
+    return `${Math.round(x * 100)}%`;
+  };
+  const th = (label, align = "right") => (
+    <th style={{ textAlign: align, padding: "7px 12px", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: "0.06em", color: COLORS.muted, textTransform: "uppercase", whiteSpace: "nowrap" }}>
+      {label}
+    </th>
+  );
+  const mono = { padding: "8px 12px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, whiteSpace: "nowrap" };
+  const weeksLeft = remainingWeeks.length;
+
+  return (
+    <div style={{ marginTop: 22 }}>
+      <SectionLabel>Playoff odds</SectionLabel>
+      <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
+        {weeksLeft} {weeksLeft === 1 ? "week" : "weeks"} left (Weeks {remainingWeeks[0]}{weeksLeft > 1 ? `-${remainingWeeks[weeksLeft - 1]}` : ""}) and{" "}
+        {SIM_RUNS.toLocaleString()} simulated seasons using every team's real schedule and how they've actually scored.
+        Top {playoffTeams} make it{byes ? `, top ${byes} get the bye` : ""}. Math doesn't care about your feelings.
+      </div>
+      {error ? (
+        <Card><div style={{ color: COLORS.muted }}>Couldn't load the remaining schedule from Sleeper. Refresh to try again.</div></Card>
+      ) : !results ? (
+        <Card><div style={{ color: COLORS.muted }}>Running the simulations...</div></Card>
+      ) : (
+        <Card style={{ padding: 0, overflow: "hidden" }}>
+          <div style={{ overflowX: "auto" }}>
+            <table className="sortable-table" style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ background: COLORS.surfaceLight }}>
+                  <th className="col-team" style={{ textAlign: "left", padding: "7px 12px", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: "0.06em", color: COLORS.muted, textTransform: "uppercase" }}>Team</th>
+                  {th("Record")}
+                  {th("Proj W")}
+                  {th("Playoffs", "left")}
+                  {byes ? th("Bye") : null}
+                  {th("#1 seed")}
+                  {th("Last place")}
+                </tr>
+              </thead>
+              <tbody>
+                {results.map((r) => (
+                  <tr key={r.rosterId} style={{ borderTop: `1px solid ${COLORS.hairline}` }}>
+                    <td className="col-team" style={{ padding: "8px 12px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <Crest name={r.name} logo={r.avatar} size={24} />
+                        <span style={{ fontWeight: 600 }}>{r.displayName}</span>
+                      </div>
+                    </td>
+                    <td style={{ ...mono, color: COLORS.muted }}>{r.record}</td>
+                    <td style={mono}>{fmt(r.projWins, 1)}</td>
+                    <td style={{ ...mono, textAlign: "left", minWidth: 150 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <div style={{ flex: 1, height: 8, background: COLORS.surfaceLight, borderRadius: 4, overflow: "hidden", minWidth: 70 }}>
+                          <div style={{ width: `${r.playoff * 100}%`, height: "100%", background: r.playoff >= 0.5 ? COLORS.turf : COLORS.gold }} />
+                        </div>
+                        <span style={{ fontWeight: 700, color: r.playoff >= 0.5 ? COLORS.turf : r.playoff > 0 ? COLORS.goldDim : COLORS.muted, width: 46, textAlign: "right" }}>
+                          {pct(r.playoff, "playoff")}
+                        </span>
+                      </div>
+                    </td>
+                    {byes ? <td style={mono}>{pct(r.bye)}</td> : null}
+                    <td style={mono}>{pct(r.first)}</td>
+                    <td style={{ ...mono, color: r.last >= 0.2 ? COLORS.red : undefined }}>{pct(r.last, "last")}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+      <div style={{ fontSize: 11, color: COLORS.muted, marginTop: 8 }}>
+        "Lock" and "Out" mean it happened in every simulation, not that it's mathematically official. Projected wins
+        include current wins. Odds refresh every time the page loads, so they'll move a point or two run to run.
+      </div>
     </div>
   );
 }
@@ -5588,9 +5814,96 @@ function useLeagueSuperlatives(data, standings, usersById) {
 
   const mostTitles = championsByOwner[0];
 
+  // What each manager called their team in a given season, so all-time
+  // records can show "2025 as Bijan al-Gaib" even after a rename.
+  const teamNameIn = (ownerId, season) => {
+    if (!ownerId) return null;
+    const hist = seasonHistory.find((s) => String(s.season) === String(season));
+    const pool = hist ? hist.users || [] : users;
+    const u = pool.find((x) => x.user_id === ownerId);
+    return u ? teamName(u) : null;
+  };
+
+  // Game-level records across every linked season, regular season only
+  // (playoff and consolation weeks skipped), ignoring unplayed 0-0 games.
+  const gameRecords = useMemo(() => {
+    const seasons = [
+      ...seasonHistory.map((s) => ({
+        season: s.season, weekMatchups: s.weekMatchups || {}, rosters: s.rosters || [],
+        playoffWeekStart: s.playoffWeekStart || 15,
+      })),
+      {
+        season: league?.season, weekMatchups: weekMatchups || {}, rosters,
+        playoffWeekStart: league?.settings?.playoff_week_start || 15,
+      },
+    ].sort((a, b) => Number(a.season) - Number(b.season));
+
+    let blowout = null, closest = null, lowGame = null, longestStreak = null;
+    const careerPA = {};
+    const streaks = {}; // ownerId -> { len, startSeason, startWeek }
+
+    seasons.forEach((sz) => {
+      const ownerOf = (rid) => sz.rosters.find((r) => r.roster_id === rid)?.owner_id;
+      Object.keys(sz.weekMatchups).map(Number).sort((a, b) => a - b).forEach((week) => {
+        if (week >= sz.playoffWeekStart) return;
+        const byId = {};
+        (sz.weekMatchups[week] || []).forEach((m) => {
+          if (m.matchup_id == null) return;
+          (byId[m.matchup_id] = byId[m.matchup_id] || []).push(m);
+        });
+        Object.values(byId).forEach((pair) => {
+          if (pair.length !== 2) return;
+          const [a, b] = pair;
+          const pa = a.points ?? 0, pb = b.points ?? 0;
+          if (!pa || !pb) return;
+          const oa = ownerOf(a.roster_id), ob = ownerOf(b.roster_id);
+          if (!oa || !ob) return;
+          const margin = Math.abs(pa - pb);
+          const [w, l, wp, lp] = pa >= pb ? [oa, ob, pa, pb] : [ob, oa, pb, pa];
+          const game = { winner: w, loser: l, winnerPts: wp, loserPts: lp, margin, week, season: sz.season };
+          if (!blowout || margin > blowout.margin) blowout = game;
+          if (!closest || margin < closest.margin) closest = game;
+          [[oa, pa], [ob, pb]].forEach(([o, pts]) => {
+            if (!lowGame || pts < lowGame.points) lowGame = { ownerId: o, points: pts, week, season: sz.season };
+          });
+          careerPA[oa] = (careerPA[oa] || 0) + pb;
+          careerPA[ob] = (careerPA[ob] || 0) + pa;
+          [[oa, pa > pb], [ob, pb > pa]].forEach(([o, won]) => {
+            if (won) {
+              const cur = streaks[o] && streaks[o].len > 0 ? streaks[o] : { len: 0, startSeason: sz.season, startWeek: week };
+              cur.len += 1;
+              cur.endSeason = sz.season; cur.endWeek = week;
+              streaks[o] = cur;
+              if (!longestStreak || cur.len > longestStreak.len) longestStreak = { ownerId: o, ...cur };
+            } else {
+              streaks[o] = { len: 0 };
+            }
+          });
+        });
+      });
+    });
+
+    let mostPA = null;
+    Object.entries(careerPA).forEach(([ownerId, pts]) => {
+      if (!mostPA || pts > mostPA.points) mostPA = { ownerId, points: pts };
+    });
+    return { blowout, closest, lowGame, longestStreak, mostPA };
+  }, [seasonHistory, weekMatchups, rosters, league]);
+
+  const mostCareerPoints = useMemo(() => {
+    const totals = {};
+    allSeasonEntries.forEach((e) => (e.standings || []).forEach((s) => {
+      if (s.ownerId) totals[s.ownerId] = (totals[s.ownerId] || 0) + (s.fpts || 0);
+    }));
+    let best = null;
+    Object.entries(totals).forEach(([ownerId, pts]) => { if (!best || pts > best.points) best = { ownerId, points: pts }; });
+    return best;
+  }, [allSeasonEntries]);
+
   return {
     championsByOwner, orderedTitles, currentSeasonSuper, ownerForRoster, wallOfShame,
     historyRows, ownerDirectory, allSeasonEntries, allTimeSuperlatives, mostTitles,
+    teamNameIn, gameRecords, mostCareerPoints,
   };
 }
 
@@ -5661,7 +5974,14 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
   const {
     championsByOwner, orderedTitles, currentSeasonSuper, ownerForRoster,
     wallOfShame, historyRows, ownerDirectory, allTimeSuperlatives, mostTitles,
+    teamNameIn, gameRecords, mostCareerPoints,
   } = superlatives;
+  const ownerById = (id) => (id && (usersById[id] || ownerDirectory[id])) || null;
+  // "2025 as Bijan al-Gaib" for a record set in a specific season
+  const asOf = (ownerId, season) => {
+    const n = teamNameIn(ownerId, season);
+    return n ? `${season} as ${n}` : `${season}`;
+  };
   // Career/all-time cards show each manager under their current team name.
   // Season-specific spots (banners, podiums, wall of shame) keep the name
   // they had that year.
@@ -5814,7 +6134,9 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
                   <Crest name={teamName(currentUser(c.user))} logo={avatarUrl(currentUser(c.user))} size={32} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 600 }}>{withOwner(currentUser(c.user))}</div>
-                    <div style={{ fontSize: 12, color: COLORS.muted }}>{c.years.slice().sort().join(", ")}</div>
+                    <div style={{ fontSize: 11, color: COLORS.muted, marginTop: 2 }}>
+                      {c.years.slice().sort().map((y) => asOf(c.user.user_id, y)).join(" · ")}
+                    </div>
                   </div>
                   <div style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 18, color: COLORS.gold, whiteSpace: "nowrap", flexShrink: 0 }}>
                     {c.years.length} {c.years.length === 1 ? "title" : "titles"}
@@ -5880,55 +6202,115 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
         <div>
           <SectionLabel>All-time superlatives</SectionLabel>
           <div className="home-super-grid">
-            <SuperlativeCard
-              accent={SUPERLATIVE_ACCENTS[0]}
-              label="Most titles"
-              value={mostTitles ? `${mostTitles.years.length} ${mostTitles.years.length === 1 ? "title" : "titles"}` : "-"}
-              user={currentUser(mostTitles?.user)}
-            />
-            <SuperlativeCard
-              accent={SUPERLATIVE_ACCENTS[1]}
-              label="Most playoff wins"
-              value={allTimeSuperlatives.mostPlayoffWins ? `${allTimeSuperlatives.mostPlayoffWins.wins} wins` : "-"}
-              user={allTimeSuperlatives.mostPlayoffWins ? ownerDirectory[allTimeSuperlatives.mostPlayoffWins.ownerId] : null}
-            />
-            <SuperlativeCard
-              accent={SUPERLATIVE_ACCENTS[2]}
-              label="Best win %"
-              value={allTimeSuperlatives.bestWinPct ? `${fmt(allTimeSuperlatives.bestWinPct.pct * 100, 0)}% (${allTimeSuperlatives.bestWinPct.wins}-${allTimeSuperlatives.bestWinPct.losses})` : "-"}
-              user={allTimeSuperlatives.bestWinPct ? ownerDirectory[allTimeSuperlatives.bestWinPct.ownerId] : null}
-            />
-            <SuperlativeCard
-              accent={SUPERLATIVE_ACCENTS[3]}
-              label="Highest career PPG"
-              value={allTimeSuperlatives.bestPPG ? `${fmt(allTimeSuperlatives.bestPPG.ppg)} pts` : "-"}
-              user={allTimeSuperlatives.bestPPG ? ownerDirectory[allTimeSuperlatives.bestPPG.ownerId] : null}
-            />
-            <SuperlativeCard
-              accent={SUPERLATIVE_ACCENTS[4]}
-              label="Best regular season"
-              value={allTimeSuperlatives.bestSeason ? `${allTimeSuperlatives.bestSeason.wins}-${allTimeSuperlatives.bestSeason.losses} · ${allTimeSuperlatives.bestSeason.season}` : "-"}
-              user={allTimeSuperlatives.bestSeason ? ownerDirectory[allTimeSuperlatives.bestSeason.ownerId] : null}
-            />
-            <SuperlativeCard
-              accent={SUPERLATIVE_ACCENTS[5]}
-              label="Highest scoring season"
-              value={allTimeSuperlatives.highestScoringSeason ? `${fmt(allTimeSuperlatives.highestScoringSeason.fpts)} pts · ${allTimeSuperlatives.highestScoringSeason.season}` : "-"}
-              user={allTimeSuperlatives.highestScoringSeason ? ownerDirectory[allTimeSuperlatives.highestScoringSeason.ownerId] : null}
-            />
-            <SuperlativeCard
-              accent={SUPERLATIVE_ACCENTS[6]}
-              label="Highest scoring week"
-              value={allTimeSuperlatives.singleGame ? `${fmt(allTimeSuperlatives.singleGame.points)} pts · Wk ${allTimeSuperlatives.singleGame.week}, ${allTimeSuperlatives.singleGame.season}` : "-"}
-              user={allTimeSuperlatives.singleGame?.owner}
-            />
-            <SuperlativeCard
-              accent={SUPERLATIVE_ACCENTS[7]}
-              label="Single-game record"
-              sublabel={allTimeSuperlatives.bestPlayerRecord ? playerLabel(allTimeSuperlatives.bestPlayerRecord.playerId) : null}
-              value={allTimeSuperlatives.bestPlayerRecord ? `${fmt(allTimeSuperlatives.bestPlayerRecord.points)} pts · Wk ${allTimeSuperlatives.bestPlayerRecord.week}, ${allTimeSuperlatives.bestPlayerRecord.season}` : "-"}
-              user={allTimeSuperlatives.bestPlayerRecord?.owner}
-            />
+            {(() => {
+              const A = allTimeSuperlatives;
+              const G = gameRecords || {};
+              const pick = (cond, card) => (cond ? [card] : []);
+              const cards = [
+                {
+                  label: "Most titles",
+                  value: mostTitles ? `${mostTitles.years.length} ${mostTitles.years.length === 1 ? "title" : "titles"}` : "-",
+                  user: currentUser(mostTitles?.user),
+                  note: mostTitles ? mostTitles.years.slice().sort().map((y) => asOf(mostTitles.user.user_id, y)).join(" · ") : null,
+                },
+                {
+                  label: "Most playoff wins",
+                  value: A.mostPlayoffWins ? `${A.mostPlayoffWins.wins} wins` : "-",
+                  user: ownerById(A.mostPlayoffWins?.ownerId),
+                },
+                {
+                  label: "Best career win %",
+                  value: A.bestWinPct ? `${fmt(A.bestWinPct.pct * 100, 0)}%` : "-",
+                  user: ownerById(A.bestWinPct?.ownerId),
+                  sub: A.bestWinPct ? `${A.bestWinPct.wins}-${A.bestWinPct.losses} career record` : null,
+                },
+                {
+                  label: "Highest career PPG",
+                  value: A.bestPPG ? `${fmt(A.bestPPG.ppg)} pts` : "-",
+                  user: ownerById(A.bestPPG?.ownerId),
+                },
+                ...pick(mostCareerPoints, {
+                  label: "Most career points",
+                  value: mostCareerPoints ? `${fmt(mostCareerPoints.points, 0)} pts` : "-",
+                  user: ownerById(mostCareerPoints?.ownerId),
+                }),
+                ...pick(G.mostPA, {
+                  label: "Most points against",
+                  value: G.mostPA ? `${fmt(G.mostPA.points, 0)} pts` : "-",
+                  user: ownerById(G.mostPA?.ownerId),
+                  sub: "Career, regular season. Somebody hates this guy.",
+                }),
+                {
+                  label: "Best regular season",
+                  value: A.bestSeason ? `${A.bestSeason.wins}-${A.bestSeason.losses}` : "-",
+                  user: ownerById(A.bestSeason?.ownerId),
+                  note: A.bestSeason ? asOf(A.bestSeason.ownerId, A.bestSeason.season) : null,
+                },
+                {
+                  label: "Highest scoring season",
+                  value: A.highestScoringSeason ? `${fmt(A.highestScoringSeason.fpts)} pts` : "-",
+                  user: ownerById(A.highestScoringSeason?.ownerId),
+                  note: A.highestScoringSeason ? asOf(A.highestScoringSeason.ownerId, A.highestScoringSeason.season) : null,
+                },
+                ...pick(G.longestStreak, {
+                  label: "Longest win streak",
+                  value: G.longestStreak ? `${G.longestStreak.len} straight` : "-",
+                  user: ownerById(G.longestStreak?.ownerId),
+                  sub: G.longestStreak
+                    ? (G.longestStreak.startSeason === G.longestStreak.endSeason
+                        ? `Weeks ${G.longestStreak.startWeek}-${G.longestStreak.endWeek}, ${G.longestStreak.endSeason}`
+                        : `Wk ${G.longestStreak.startWeek}, ${G.longestStreak.startSeason} to Wk ${G.longestStreak.endWeek}, ${G.longestStreak.endSeason}`)
+                    : null,
+                  note: G.longestStreak ? asOf(G.longestStreak.ownerId, G.longestStreak.endSeason) : null,
+                }),
+                {
+                  label: "Highest scoring week",
+                  value: A.singleGame ? `${fmt(A.singleGame.points)} pts` : "-",
+                  user: currentUser(A.singleGame?.owner),
+                  sub: A.singleGame ? `Week ${A.singleGame.week}` : null,
+                  note: A.singleGame ? asOf(A.singleGame.owner?.user_id, A.singleGame.season) : null,
+                },
+                ...pick(G.lowGame, {
+                  label: "Lowest scoring week",
+                  value: G.lowGame ? `${fmt(G.lowGame.points)} pts` : "-",
+                  user: ownerById(G.lowGame?.ownerId),
+                  sub: G.lowGame ? `Week ${G.lowGame.week}` : null,
+                  note: G.lowGame ? asOf(G.lowGame.ownerId, G.lowGame.season) : null,
+                }),
+                ...pick(G.blowout, {
+                  label: "Biggest blowout",
+                  value: G.blowout ? `+${fmt(G.blowout.margin)}` : "-",
+                  user: ownerById(G.blowout?.winner),
+                  sub: G.blowout ? `${fmt(G.blowout.winnerPts)} to ${fmt(G.blowout.loserPts)} over ${teamNameIn(G.blowout.loser, G.blowout.season) || "?"}, Week ${G.blowout.week}` : null,
+                  note: G.blowout ? asOf(G.blowout.winner, G.blowout.season) : null,
+                }),
+                ...pick(G.closest, {
+                  label: "Closest game",
+                  value: G.closest ? `${fmt(G.closest.margin, 2)} pts` : "-",
+                  user: ownerById(G.closest?.winner),
+                  sub: G.closest ? `${fmt(G.closest.winnerPts)} to ${fmt(G.closest.loserPts)} over ${teamNameIn(G.closest.loser, G.closest.season) || "?"}, Week ${G.closest.week}` : null,
+                  note: G.closest ? asOf(G.closest.winner, G.closest.season) : null,
+                }),
+                {
+                  label: "Best player game",
+                  value: A.bestPlayerRecord ? `${fmt(A.bestPlayerRecord.points)} pts` : "-",
+                  user: currentUser(A.bestPlayerRecord?.owner),
+                  sub: A.bestPlayerRecord ? `${playerLabel(A.bestPlayerRecord.playerId)}, Week ${A.bestPlayerRecord.week}` : null,
+                  note: A.bestPlayerRecord ? asOf(A.bestPlayerRecord.owner?.user_id, A.bestPlayerRecord.season) : null,
+                },
+              ];
+              return cards.map((c, i) => (
+                <SuperlativeCard
+                  key={c.label}
+                  accent={SUPERLATIVE_ACCENTS[i % SUPERLATIVE_ACCENTS.length]}
+                  label={c.label}
+                  value={c.value}
+                  user={c.user}
+                  sublabel={c.sub}
+                  note={c.note}
+                />
+              ));
+            })()}
           </div>
         </div>
       </div>
@@ -5938,19 +6320,24 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
 
 const SUPERLATIVE_ACCENTS = ["#FF6B00", "#0E4D33", "#B8860B", "#7B4B27", "#3F7A63", "#C1490A", "#5A371C", "#D9560A"];
 
-function SuperlativeCard({ label, value, user, accent, sublabel }) {
+function SuperlativeCard({ label, value, user, accent, sublabel, note }) {
   return (
-    <Card style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", borderLeft: `3px solid ${accent}` }}>
-      <Crest name={user ? teamName(user) : "-"} logo={user ? avatarUrl(user) : null} size={30} />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 11, color: COLORS.muted, textTransform: "uppercase", letterSpacing: "0.04em" }}>{label}</div>
-        <div style={{ fontWeight: 600, fontSize: 13 }}>{sublabel || (user ? withOwner(user) : "Not yet decided")}</div>
-        {sublabel && user ? (
-          <div style={{ fontSize: 11, color: COLORS.muted }}>{withOwner(user)}</div>
-        ) : null}
+    <Card style={{ padding: "11px 14px", borderLeft: `3px solid ${accent}` }}>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10 }}>
+        <div style={{ fontSize: 11, color: COLORS.muted, textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600 }}>
+          {label}
+        </div>
+        <div style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 16, color: accent, whiteSpace: "nowrap" }}>
+          {value}
+        </div>
       </div>
-      <div style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 15, color: accent, whiteSpace: "nowrap", textAlign: "right" }}>
-        {value}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8 }}>
+        <Crest name={user ? teamName(user) : "-"} logo={user ? avatarUrl(user) : null} size={30} />
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontWeight: 600, fontSize: 14, color: COLORS.bone }}>{user ? withOwner(user) : "Not yet decided"}</div>
+          {sublabel && <div style={{ fontSize: 12, color: COLORS.muted, marginTop: 1 }}>{sublabel}</div>}
+          {note && <div style={{ fontSize: 11, color: COLORS.turfLight, fontStyle: "italic", marginTop: 1 }}>{note}</div>}
+        </div>
       </div>
     </Card>
   );
