@@ -3314,7 +3314,11 @@ function RecapTab({ data, rostersById, usersById }) {
   // Only completed weeks - weekMatchups already excludes the in-progress
   // current week, so there's nothing else to filter here.
   const availableWeeks = useMemo(() => {
-    return Object.keys(weekMatchups || {}).map(Number).sort((a, b) => a - b);
+    // Only weeks that were actually played (past seasons store all 18).
+    return Object.keys(weekMatchups || {})
+      .map(Number)
+      .filter((w) => (weekMatchups[w] || []).some((m) => (m.points ?? 0) > 0))
+      .sort((a, b) => a - b);
   }, [weekMatchups]);
 
   const [selectedWeek, setSelectedWeek] = useState(null);

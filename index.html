@@ -4,10 +4,10 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Boiler Dynasty</title>
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%230E4D33'/%3E%3Cellipse cx='50' cy='50' rx='32' ry='20' fill='%23FF6B00'/%3E%3Cpath d='M27 50h46M40 42v16M50 40v20M60 42v16' stroke='white' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E" />
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%231C1C1C'/%3E%3Cellipse cx='50' cy='50' rx='32' ry='20' fill='%23B58A00'/%3E%3Cpath d='M27 50h46M40 42v16M50 40v20M60 42v16' stroke='white' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E" />
 <style>
   * { box-sizing: border-box; }
-  html, body { margin: 0; padding: 0; background: #F4FAF6; overflow-x: hidden; width: 100%; }
+  html, body { margin: 0; padding: 0; background: #FAF9F6; overflow-x: hidden; width: 100%; }
   #root { min-height: 100vh; }
 </style>
 <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
@@ -70,6 +70,14 @@ textarea:hover, textarea:focus { border-color: #0E4D33; outline: none; }
   0%, 100% { transform: rotate(-2.5deg); }
   50% { transform: rotate(2.5deg); }
 }
+.rafter-banner { position: relative; transition: transform 0.2s ease; }
+.rafter-banner:hover { transform: translateY(-3px); }
+.banner-sheen { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.banner-sheen::after { content: ""; position: absolute; top: -20%; bottom: -20%; width: 40%; left: -60%;
+  background: linear-gradient(100deg, transparent, rgba(255,255,255,0.16), transparent);
+  transform: skewX(-12deg); animation: bannerSheen 7s ease-in-out 1.2s infinite; }
+@keyframes bannerSheen { 0% { left: -60%; } 22% { left: 130%; } 100% { left: 130%; } }
+@media (prefers-reduced-motion: reduce) { .banner-pennant, .banner-sheen::after { animation: none; } }
 .banner-pennant {
   transform-origin: top center;
   animation: bannerSway 3.4s ease-in-out infinite;
@@ -83,6 +91,22 @@ textarea:hover, textarea:focus { border-color: #0E4D33; outline: none; }
   animation-delay: -2.2s;
 }
 .site-nav { scrollbar-width: none; }
+.rail-strip { position: relative; height: 46px; margin-top: 4px; overflow: hidden; }
+.rail-line { position: absolute; left: 0; right: 0; bottom: 3px; height: 4px;
+  border-top: 2px solid #CFB991;
+  background: repeating-linear-gradient(90deg, rgba(207,185,145,0.55) 0 3px, transparent 3px 14px); }
+.train-run { position: absolute; bottom: 6px; left: calc(100% - 166px); animation: trainRoll 5.2s cubic-bezier(.33,.0,.2,1) 0.5s both; }
+@keyframes trainRoll { from { left: -190px; } to { left: calc(100% - 166px); } }
+.train-wheel { transform-box: fill-box; transform-origin: center; animation: wheelSpin 0.65s linear 8 0.5s; }
+@keyframes wheelSpin { to { transform: rotate(360deg); } }
+.train-puff { transform-box: fill-box; transform-origin: center; animation: puff 1.6s ease-out infinite; opacity: 0; }
+.train-puff.p2 { animation-delay: 0.55s; }
+.train-puff.p3 { animation-delay: 1.1s; }
+@keyframes puff { 0% { opacity: 0.85; transform: translate(0, 0) scale(0.6); } 100% { opacity: 0; transform: translate(-14px, -12px) scale(1.6); } }
+@media (prefers-reduced-motion: reduce) {
+  .train-run, .train-wheel { animation: none; }
+  .train-puff { animation: none; opacity: 0; }
+}
 .site-nav::-webkit-scrollbar { display: none; }
 .mobile-only { display: none !important; }
 .home-super-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 10px; }
@@ -95,38 +119,91 @@ textarea:hover, textarea:focus { border-color: #0E4D33; outline: none; }
   .site-nav button { flex-shrink: 0; padding: 9px 12px !important; }
   .site-main { padding: 12px 14px 24px !important; }
   .sortable-table th, .sortable-table td { padding: 7px 8px !important; font-size: 13px; }
-  .sortable-table .col-team { position: sticky; left: 0; z-index: 1; background: #FFFFFF; white-space: nowrap; box-shadow: 1px 0 0 rgba(14,77,51,0.14); }
-  .sortable-table thead .col-team { background: #EAF4EE; }
+  .sortable-table .col-team { position: sticky; left: 0; z-index: 1; background: #FFFFFF; white-space: nowrap; box-shadow: 1px 0 0 rgba(0,0,0,0.14); }
+  .sortable-table thead .col-team { background: #F2F0EB; }
   .home-super-grid { grid-template-columns: 1fr; }
+  .rail-strip { height: 32px; }
+  .train-run svg { width: 92px; height: auto; }
+  .train-run { left: calc(100% - 100px); }
+  @keyframes trainRoll { from { left: -120px; } to { left: calc(100% - 100px); } }
   .roster-cols { grid-template-columns: minmax(0, 1fr) !important; }
 }
 `;
 
+// A simple steam locomotive, drawn for this site: gold on the black header.
+function TrainSvg() {
+  const G = "#CFB991", R = "#DAAA00", K = "#000000";
+  const wheel = (cx, cy, r, cls = "train-wheel") => (
+    <g className={cls}>
+      <circle cx={cx} cy={cy} r={r} fill={K} stroke={G} strokeWidth="2" />
+      <line x1={cx - r + 2} y1={cy} x2={cx + r - 2} y2={cy} stroke={G} strokeWidth="1.5" />
+      <line x1={cx} y1={cy - r + 2} x2={cx} y2={cy + r - 2} stroke={G} strokeWidth="1.5" />
+      <circle cx={cx} cy={cy} r="1.8" fill={R} />
+    </g>
+  );
+  return (
+    <svg width="156" height="40" viewBox="0 0 118 30" role="img" aria-label="Train">
+      <circle className="train-puff" cx="86" cy="6" r="3" fill="rgba(255,255,255,0.7)" />
+      <circle className="train-puff p2" cx="86" cy="6" r="3" fill="rgba(255,255,255,0.7)" />
+      <circle className="train-puff p3" cx="86" cy="6" r="3" fill="rgba(255,255,255,0.7)" />
+      {/* tender */}
+      <rect x="2" y="11" width="24" height="11" rx="1.5" fill={G} />
+      <rect x="4" y="9" width="20" height="3" rx="1" fill={R} />
+      {/* coupling */}
+      <rect x="26" y="18" width="5" height="2" fill={G} />
+      {/* cab */}
+      <rect x="31" y="5" width="20" height="17" rx="1.5" fill={G} />
+      <rect x="29" y="3" width="24" height="3" rx="1" fill={R} />
+      <rect x="35" y="8" width="11" height="7" rx="1" fill={K} />
+      {/* boiler */}
+      <rect x="51" y="9" width="40" height="13" rx="6" fill={G} />
+      <rect x="62" y="9" width="2" height="13" fill={R} />
+      <rect x="74" y="9" width="2" height="13" fill={R} />
+      {/* dome and stack */}
+      <rect x="66" y="5" width="7" height="5" rx="2.5" fill={R} />
+      <path d="M82 9 L83 2 L91 2 L90 9 Z" fill={G} />
+      <rect x="81" y="1" width="11" height="2" rx="1" fill={R} />
+      {/* headlamp and cowcatcher */}
+      <circle cx="92" cy="12" r="2.2" fill={R} />
+      <path d="M91 22 L102 26 L91 26 Z" fill={G} />
+      {/* frame */}
+      <rect x="2" y="21" width="92" height="2" fill={G} />
+      {wheel(9, 25, 4)}
+      {wheel(20, 25, 4)}
+      {wheel(41, 23.5, 6.5)}
+      {wheel(58, 23.5, 6.5)}
+      {wheel(75, 23.5, 6.5)}
+      {wheel(88, 25, 4)}
+    </svg>
+  );
+}
+
 const COLORS = {
-  bg: "#F4FAF6",
+  bg: "#FAF9F6",
   bg2: "#0E4D33",
+  pylon: "#FF6B00",
   surface: "#FFFFFF",
-  surfaceLight: "#EAF4EE",
-  gold: "#FF6B00",
-  goldDim: "#D9560A",
+  surfaceLight: "#F2F0EB",
+  gold: "#B58A00",
+  goldDim: "#8E6F3E",
   goldDeep: "#B8860B",
   goldTint: "#FFF3D6",
-  yellow: "#FFD400",
+  yellow: "#DAAA00",
   yellowTint: "#FFF8DB",
-  leather: "#7B4B27",
-  leatherDeep: "#5A371C",
-  leatherTint: "#F1E4D4",
+  leather: "#8E6F3E",
+  leatherDeep: "#5E4A29",
+  leatherTint: "#F3ECDD",
   turf: "#0E4D33",
   turfLight: "#3F7A63",
   turfDeep: "#0A3924",
-  turfTint: "#E1F0E7",
-  orangeTint: "#FFE6D2",
-  bone: "#12241C",
-  muted: "#6B7A70",
+  turfTint: "#F8EFD2",
+  orangeTint: "#FBF1D3",
+  bone: "#1A1A1A",
+  muted: "#6F727B",
   onTurf: "#FFFFFF",
   onTurfMuted: "rgba(255,255,255,0.68)",
   red: "#C0392B",
-  hairline: "rgba(14,77,51,0.14)",
+  hairline: "rgba(0,0,0,0.14)",
 };
 
 // Small color families keyed to fantasy-football position groups, built from
@@ -136,14 +213,14 @@ const POSITION_COLORS = {
   QB: { bg: "#FFE6D2", fg: "#B8460D" },
   RB: { bg: "#E1F0E7", fg: "#0E4D33" },
   WR: { bg: "#FFF3D6", fg: "#8A6A00" },
-  TE: { bg: "#F1E4D4", fg: "#5A371C" },
-  FLEX: { bg: "#EAF4EE", fg: "#3F7A63" },
-  SUPER_FLEX: { bg: "#EAF4EE", fg: "#3F7A63" },
-  K: { bg: "#F1E4D4", fg: "#5A371C" },
+  TE: { bg: "#F3ECDD", fg: "#5E4A29" },
+  FLEX: { bg: "#F2F0EB", fg: "#3F7A63" },
+  SUPER_FLEX: { bg: "#F2F0EB", fg: "#3F7A63" },
+  K: { bg: "#F3ECDD", fg: "#5E4A29" },
   DEF: { bg: "#FFE6D2", fg: "#B8460D" },
 };
 function positionColor(pos) {
-  return POSITION_COLORS[pos] || { bg: "#EAF4EE", fg: "#6B7A70" };
+  return POSITION_COLORS[pos] || { bg: "#F2F0EB", fg: "#6F727B" };
 }
 
 const INJURY_COLORS = {
@@ -153,10 +230,10 @@ const INJURY_COLORS = {
   Doubtful: { bg: "#FFE0C2", fg: "#B8460D" },
   Questionable: { bg: "#FFF3D6", fg: "#8A6A00" },
   Sus: { bg: "#F1CBC0", fg: "#8A2E12" },
-  NA: { bg: "#EAF4EE", fg: "#6B7A70" },
+  NA: { bg: "#F2F0EB", fg: "#6F727B" },
 };
 function injuryColor(status) {
-  return INJURY_COLORS[status] || { bg: "#EAF4EE", fg: "#6B7A70" };
+  return INJURY_COLORS[status] || { bg: "#F2F0EB", fg: "#6F727B" };
 }
 
 // Sleeper's transactions/{round} endpoint appears to return round-0 (before
@@ -302,6 +379,7 @@ function useLeagueData(leagueId) {
         });
         const byMatchupId = {};
         (matchups || []).forEach((m) => {
+          if (m.matchup_id == null) return; // byes / eliminated teams in playoff weeks
           if (!byMatchupId[m.matchup_id]) byMatchupId[m.matchup_id] = [];
           byMatchupId[m.matchup_id].push(m);
         });
@@ -529,6 +607,7 @@ function useLeagueData(leagueId) {
         }
 
         const seasonHistory = await walkHistory(league);
+        const currentBracket = await j(`${API}/league/${leagueId}/winners_bracket`).catch(() => []);
 
         // Draft pick ownership: Sleeper only returns picks that have been
         // traded away from their original owner; anything not in this list
@@ -593,6 +672,7 @@ function useLeagueData(leagueId) {
             prevLeague,
             prevWinnerRosterId,
             seasonHistory,
+            currentBracket: Array.isArray(currentBracket) ? currentBracket : [],
             weekMatchups,
             tradedPicks,
             draftRounds,
@@ -676,8 +756,8 @@ function seasonPhaseText(seasonType, week) {
 
 function seasonPhaseColor(seasonType) {
   if (seasonType === "regular") return { bg: "#FF6B00", fg: "#FFFFFF" };
-  if (seasonType === "post") return { bg: "#FFD400", fg: "#0A3924" };
-  if (seasonType === "pre") return { bg: "#7B4B27", fg: "#FFFFFF" };
+  if (seasonType === "post") return { bg: "#CFB991", fg: "#000000" };
+  if (seasonType === "pre") return { bg: "#8E6F3E", fg: "#FFFFFF" };
   return { bg: "rgba(255,255,255,0.16)", fg: "rgba(255,255,255,0.85)" };
 }
 
@@ -688,7 +768,7 @@ function fmt(n, d = 1) {
 
 const TEAM_PALETTE = [
   "#1D6F4E", "#C0392B", "#B5842B", "#2E5E8C",
-  "#7B4B27", "#5B3E8C", "#1E7A6B", "#A6470D",
+  "#8E6F3E", "#5B3E8C", "#1E7A6B", "#A6470D",
 ];
 
 function teamColor(name) {
@@ -826,6 +906,7 @@ function computeH2HFromWeeks(weekMatchups, rosters, usersById) {
   Object.values(weekMatchups || {}).forEach((matchups) => {
     const byMatchupId = {};
     (matchups || []).forEach((m) => {
+      if (m.matchup_id == null) return; // byes / eliminated teams in playoff weeks
       if (!byMatchupId[m.matchup_id]) byMatchupId[m.matchup_id] = [];
       byMatchupId[m.matchup_id].push(m);
     });
@@ -896,6 +977,7 @@ function computeStreaks(weekMatchups, rosters) {
     const matchups = weekMatchups[week] || [];
     const byMatchupId = {};
     matchups.forEach((m) => {
+      if (m.matchup_id == null) return; // byes / eliminated teams in playoff weeks
       if (!byMatchupId[m.matchup_id]) byMatchupId[m.matchup_id] = [];
       byMatchupId[m.matchup_id].push(m);
     });
@@ -1231,7 +1313,10 @@ function App() {
         className="site-header"
         style={{
           borderBottom: `1px solid ${COLORS.hairline}`,
-          background: COLORS.bg2,
+          borderTop: "4px solid #DAAA00",
+          backgroundColor: COLORS.bg2,
+          backgroundImage:
+            "repeating-linear-gradient(90deg, rgba(255,255,255,0.05) 0 2px, transparent 2px 90px), repeating-linear-gradient(90deg, rgba(0,0,0,0.07) 0 180px, transparent 180px 360px)",
           padding: "16px 28px 0",
         }}
       >
@@ -1282,8 +1367,13 @@ function App() {
           </div>
         </div>
 
+        <div className="rail-strip" aria-hidden="true">
+          <div className="rail-line" />
+          <div className="train-run"><TrainSvg /></div>
+        </div>
+
         {/* Nav */}
-        <div className="site-nav" style={{ display: "flex", gap: 4, marginTop: 14, flexWrap: "wrap" }}>
+        <div className="site-nav" style={{ display: "flex", gap: 4, marginTop: 8, flexWrap: "wrap" }}>
           {TABS.map((t) => {
             const active = tab === t.id;
             return (
@@ -1300,7 +1390,8 @@ function App() {
                   textTransform: "uppercase",
                   background: active ? COLORS.surface : "transparent",
                   color: active ? COLORS.turf : COLORS.onTurfMuted,
-                  border: `1px solid ${active ? COLORS.gold : "transparent"}`,
+                  border: `1px solid ${active ? COLORS.pylon : "transparent"}`,
+                  borderTop: `3px solid ${active ? COLORS.pylon : "transparent"}`,
                   borderBottom: "none",
                   borderRadius: "6px 6px 0 0",
                   padding: "9px 16px",
@@ -1397,6 +1488,17 @@ function App() {
           />
         )}
       </div>
+      <div style={{ background: "#000000", borderTop: "3px solid #DAAA00", marginTop: 24, padding: "18px 16px", textAlign: "center" }}>
+        <div style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 18, color: "#CFB991", letterSpacing: "0.04em" }}>
+          BOILER UP! 🚂
+        </div>
+        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: "rgba(255,255,255,0.6)", marginTop: 4 }}>
+          Boiler Dynasty · built by {(() => {
+            const builder = (data.users || []).find((u) => (u.display_name || "").toLowerCase() === "cttoner");
+            return builder ? withOwner(builder) : "C. Toner";
+          })()}
+        </div>
+      </div>
     </div>
   );
 }
@@ -1477,14 +1579,13 @@ function SortableTable({ columns, rows, rowKey, defaultSortKey, defaultSortDir =
 }
 
 function heatColor(pct) {
-  // Lerp between a rust/loss anchor and the turf/win anchor.
-  const lossRGB = [193, 73, 10];
-  const winRGB = [14, 77, 51];
+  // Winning matchups shade gold, losing ones shade gray, and an even
+  // record stays close to neutral. The further from .500, the stronger.
   const p = Math.max(0, Math.min(1, pct));
-  const r = Math.round(lossRGB[0] + (winRGB[0] - lossRGB[0]) * p);
-  const g = Math.round(lossRGB[1] + (winRGB[1] - lossRGB[1]) * p);
-  const b = Math.round(lossRGB[2] + (winRGB[2] - lossRGB[2]) * p);
-  return { bg: `rgba(${r},${g},${b},0.22)`, solid: `rgb(${r},${g},${b})` };
+  const strength = Math.abs(p - 0.5) * 2; // 0 at .500, 1 at 1.000 or .000
+  const rgb = p >= 0.5 ? [218, 170, 0] : [111, 114, 123];
+  const alpha = 0.08 + 0.42 * strength;
+  return { bg: `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${alpha.toFixed(2)})`, solid: p >= 0.5 ? "#6B5200" : "#3F4249" };
 }
 
 function shortLabel(u) {
@@ -1692,11 +1793,11 @@ function StandingsTab({ standings, playoffTeams, data, usersById }) {
           accessor: (r) => -r.seed,
           render: (r) =>
             r.isPlayoffPosition ? (
-              <span style={{ whiteSpace: "nowrap", color: COLORS.turf, fontWeight: 600 }}>
-                {r.seed}
+              <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "flex-end", gap: 6, whiteSpace: "nowrap", color: COLORS.turf, fontWeight: 600 }}>
                 {r.hasBye ? (
-                  <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: COLORS.gold, background: COLORS.orangeTint, borderRadius: 999, padding: "1px 6px" }}>BYE</span>
+                  <span style={{ fontSize: 10, fontWeight: 700, color: "#FFFFFF", background: COLORS.pylon, borderRadius: 999, padding: "1px 6px" }}>BYE</span>
                 ) : null}
+                <span style={{ minWidth: 14, textAlign: "right" }}>{r.seed}</span>
               </span>
             ) : (
               <span style={{ color: COLORS.muted }}>-</span>
@@ -1840,8 +1941,8 @@ function StandingsTab({ standings, playoffTeams, data, usersById }) {
 
           <SectionLabel>Head-to-head</SectionLabel>
           <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
-            Each cell is the row manager's all-time record against the column manager. Greener means they own that
-            matchup and know it. Rustier means it might be time to quietly retire that rivalry.
+            Each cell is the row manager's all-time record against the column manager. Gold means they own that
+            matchup and know it. Gray means it might be time to quietly retire that rivalry.
           </div>
           <Card style={{ padding: 8, overflowX: "auto" }}>
             <table style={{ borderCollapse: "collapse" }}>
@@ -1989,6 +2090,7 @@ function MatchupsTab({ matchups, rostersById, usersById, week, seasonType }) {
   const grouped = useMemo(() => {
     const byMatchupId = {};
     matchups.forEach((m) => {
+      if (m.matchup_id == null) return; // byes / eliminated teams in playoff weeks
       if (!byMatchupId[m.matchup_id]) byMatchupId[m.matchup_id] = [];
       byMatchupId[m.matchup_id].push(m);
     });
@@ -2351,6 +2453,7 @@ function PlayoffOdds({ data }) {
 function groupByMatchupId(matchups) {
   const byMatchupId = {};
   (matchups || []).forEach((m) => {
+    if (m.matchup_id == null) return; // byes / eliminated teams in playoff weeks
     if (!byMatchupId[m.matchup_id]) byMatchupId[m.matchup_id] = [];
     byMatchupId[m.matchup_id].push(m);
   });
@@ -3059,12 +3162,12 @@ function buildRecapImageCanvas({ leagueName, season, week, recap, ownerFor, play
   }
 
   const cards = [];
-  if (recap.stud?.length > 0) cards.push({ label: "STUD OF THE WEEK", value: `${fmt(recap.stud[0].points)} PTS`, lines: playersLines(recap.stud), accent: "#FF6B00" });
+  if (recap.stud?.length > 0) cards.push({ label: "STUD OF THE WEEK", value: `${fmt(recap.stud[0].points)} PTS`, lines: playersLines(recap.stud), accent: "#B58A00" });
   if (recap.dud?.length > 0) cards.push({ label: "DUD OF THE WEEK", value: `${fmt(recap.dud[0].points)} PTS`, lines: playersLines(recap.dud), accent: "#C0392B" });
-  if (recap.blowout?.length > 0) cards.push({ label: "BIGGEST BLOWOUT", value: `${fmt(recap.blowout[0].margin)} PT MARGIN`, lines: pairsLines(recap.blowout), accent: "#7B4B27" });
+  if (recap.blowout?.length > 0) cards.push({ label: "BIGGEST BLOWOUT", value: `${fmt(recap.blowout[0].margin)} PT MARGIN`, lines: pairsLines(recap.blowout), accent: "#8E6F3E" });
   if (recap.closest?.length > 0) cards.push({ label: "CLOSEST GAME", value: `${fmt(recap.closest[0].margin)} PT MARGIN`, lines: pairsLines(recap.closest), accent: "#3F7A63" });
-  if (recap.highScore?.length > 0) cards.push({ label: "HIGH SCORE", value: `${fmt(recap.highScore[0].points)} PTS`, lines: teamsLines(recap.highScore), accent: "#FFD400" });
-  if (recap.lowScore?.length > 0) cards.push({ label: "LOW SCORE", value: `${fmt(recap.lowScore[0].points)} PTS`, lines: teamsLines(recap.lowScore), accent: "#6B7A70" });
+  if (recap.highScore?.length > 0) cards.push({ label: "HIGH SCORE", value: `${fmt(recap.highScore[0].points)} PTS`, lines: teamsLines(recap.highScore), accent: "#DAAA00" });
+  if (recap.lowScore?.length > 0) cards.push({ label: "LOW SCORE", value: `${fmt(recap.lowScore[0].points)} PTS`, lines: teamsLines(recap.lowScore), accent: "#6F727B" });
   if (recap.benchStud?.length > 0 && recap.benchStud[0].points > 0) cards.push({ label: "SHOULDA STARTED", value: `${fmt(recap.benchStud[0].points)} PTS`, lines: playersLines(recap.benchStud), accent: "#B8860B" });
 
   const gap = 16;
@@ -3091,12 +3194,12 @@ function buildRecapImageCanvas({ leagueName, season, week, recap, ownerFor, play
   canvas.height = H;
   const ctx = canvas.getContext("2d");
 
-  ctx.fillStyle = "#F4FAF6";
+  ctx.fillStyle = "#FAF9F6";
   ctx.fillRect(0, 0, W, H);
 
   ctx.fillStyle = "#0E4D33";
   ctx.fillRect(0, 0, W, headerH);
-  ctx.fillStyle = "#FFD400";
+  ctx.fillStyle = "#DAAA00";
   ctx.font = "700 22px Georgia, serif";
   ctx.fillText(fitText(ctx, (leagueName || "Fantasy League").toUpperCase(), W - pad * 2), pad, 54);
   ctx.fillStyle = "#FFFFFF";
@@ -3122,7 +3225,7 @@ function buildRecapImageCanvas({ leagueName, season, week, recap, ownerFor, play
       ctx.fillStyle = c.accent;
       ctx.fillRect(x, y, 5, row.h);
 
-      ctx.fillStyle = "#6B7A70";
+      ctx.fillStyle = "#6F727B";
       ctx.font = "700 13px Georgia, serif";
       ctx.fillText(fitText(ctx, c.label, colW - 32), x + 20, y + 28);
 
@@ -3130,7 +3233,7 @@ function buildRecapImageCanvas({ leagueName, season, week, recap, ownerFor, play
       ctx.font = "800 26px Georgia, serif";
       ctx.fillText(fitText(ctx, c.value, colW - 32), x + 20, y + 64);
 
-      ctx.fillStyle = "#12241C";
+      ctx.fillStyle = "#1A1A1A";
       ctx.font = "600 15px Georgia, serif";
       c.lines.forEach((line, li) => {
         ctx.fillText(fitText(ctx, line, colW - 32), x + 20, y + firstLineY + li * lineH);
@@ -3141,12 +3244,12 @@ function buildRecapImageCanvas({ leagueName, season, week, recap, ownerFor, play
 
   let cursorY = rowY + 26;
 
-  ctx.strokeStyle = "rgba(14,77,51,0.2)";
+  ctx.strokeStyle = "rgba(0,0,0,0.2)";
   ctx.beginPath();
   ctx.moveTo(pad, cursorY);
   ctx.lineTo(W - pad, cursorY);
   ctx.stroke();
-  ctx.fillStyle = "#6B7A70";
+  ctx.fillStyle = "#6F727B";
   ctx.font = "600 15px Georgia, serif";
   ctx.fillText("Generated from live league data", pad, cursorY + 28);
 
@@ -3211,7 +3314,11 @@ function RecapTab({ data, rostersById, usersById }) {
   // Only completed weeks - weekMatchups already excludes the in-progress
   // current week, so there's nothing else to filter here.
   const availableWeeks = useMemo(() => {
-    return Object.keys(weekMatchups || {}).map(Number).sort((a, b) => a - b);
+    // Only weeks that were actually played (past seasons store all 18).
+    return Object.keys(weekMatchups || {})
+      .map(Number)
+      .filter((w) => (weekMatchups[w] || []).some((m) => (m.points ?? 0) > 0))
+      .sort((a, b) => a - b);
   }, [weekMatchups]);
 
   const [selectedWeek, setSelectedWeek] = useState(null);
@@ -3336,7 +3443,7 @@ function RecapTab({ data, rostersById, usersById }) {
 
     if (reservedWindow) {
       reservedWindow.document.write(
-        `<title>${filename}</title><body style="margin:0;background:#12241C;display:flex;align-items:center;justify-content:center;min-height:100vh;">` +
+        `<title>${filename}</title><body style="margin:0;background:#1A1A1A;display:flex;align-items:center;justify-content:center;min-height:100vh;">` +
         `<img src="${dataUrl}" style="max-width:100%;height:auto;" />` +
         `</body>`
       );
@@ -3827,6 +3934,7 @@ function RostersTab({ rosters, usersById, players, selectedRosterId, setSelected
       team: p.team || null,
       age: playerAge(p),
       injuryStatus: p.injury_status || null,
+      boiler: isBoilermaker(p),
     };
   }
   function playerLabel(pid) {
@@ -4254,6 +4362,24 @@ function StatRow({ label, value, sub, accent }) {
   );
 }
 
+// Purdue alums get a small old-gold tag, from Sleeper's college field.
+function isBoilermaker(p) {
+  return !!p && /purdue/i.test(p.college || "");
+}
+function BoilerTag() {
+  return (
+    <span
+      title="Purdue Boilermaker"
+      style={{
+        fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, fontWeight: 700, letterSpacing: "0.06em",
+        padding: "1px 5px", borderRadius: 4, background: "#000000", color: "#CFB991", flexShrink: 0,
+      }}
+    >
+      BOILER
+    </span>
+  );
+}
+
 function PlayerRow({ info, first, muted }) {
   const pc = positionColor(info.position);
   return (
@@ -4284,7 +4410,10 @@ function PlayerRow({ info, first, muted }) {
           {info.position}
         </span>
       )}
-      <span style={{ color: muted ? COLORS.muted : COLORS.bone, fontSize: 13, minWidth: 0, flex: "1 1 auto", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{info.name}</span>
+      <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, flex: "1 1 auto" }}>
+        <span style={{ color: muted ? COLORS.muted : COLORS.bone, fontSize: 13, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{info.name}</span>
+        {info.boiler && <BoilerTag />}
+      </span>
       {info.injuryStatus && (
         <span
           style={{
@@ -5733,7 +5862,44 @@ function HistoryTab({ rostersById, usersById, standings, seasonHistory, superlat
 // wall of shame, and the 8 league-wide superlative titles) computed once
 // from a single source of truth, so both pages always agree on who holds what.
 function useLeagueSuperlatives(data, standings, usersById) {
-  const { league, seasonHistory, weekMatchups, rosters, users } = data;
+  const { league, weekMatchups, rosters, users } = data;
+  const pastSeasons = data.seasonHistory;
+
+  // Once this season's final is played, treat it like a completed season
+  // right away (banner, titles, podium, wall of shame) instead of waiting
+  // for Sleeper to roll the league over to next year.
+  const currentResult = useMemo(() => {
+    const br = data.currentBracket || [];
+    const final = br.find((m) => m.p === 1 && m.w);
+    if (!final || !league?.season) return null;
+    const ownerOfRoster = (rid) => usersById[rosters.find((r) => r.roster_id === rid)?.owner_id] || null;
+    const thirdMatch = br.find((m) => m.p === 3 && m.w);
+    const last = standings[standings.length - 1];
+    const playoffWins = {}, playoffLosses = {};
+    br.forEach((m) => {
+      const w = ownerOfRoster(m.w), l = ownerOfRoster(m.l);
+      if (w) playoffWins[w.user_id] = (playoffWins[w.user_id] || 0) + 1;
+      if (l) playoffLosses[l.user_id] = (playoffLosses[l.user_id] || 0) + 1;
+    });
+    return {
+      season: league.season,
+      champion: ownerOfRoster(final.w),
+      runnerUp: ownerOfRoster(final.l),
+      third: thirdMatch ? ownerOfRoster(thirdMatch.w) : null,
+      lastPlace: last ? ownerOfRoster(last.rosterId) : null,
+      standings,
+      users,
+      rosters,
+      playoffWins,
+      playoffLosses,
+      isCurrent: true,
+    };
+  }, [data.currentBracket, league, rosters, usersById, standings, users]);
+
+  const seasonHistory = useMemo(
+    () => (currentResult && !pastSeasons.some((s) => String(s.season) === String(currentResult.season)) ? [...pastSeasons, currentResult] : pastSeasons),
+    [pastSeasons, currentResult]
+  );
 
   const championsByOwner = useMemo(() => {
     const map = {};
@@ -5757,6 +5923,7 @@ function useLeagueSuperlatives(data, standings, usersById) {
     Object.entries(weekMatchups || {}).forEach(([week, matchups]) => {
       const byMatchupId = {};
       matchups.forEach((m) => {
+        if (m.matchup_id == null) return; // byes / eliminated teams in playoff weeks
         if (!byMatchupId[m.matchup_id]) byMatchupId[m.matchup_id] = [];
         byMatchupId[m.matchup_id].push(m);
       });
@@ -5807,7 +5974,7 @@ function useLeagueSuperlatives(data, standings, usersById) {
   }, [seasonHistory, users]);
 
   const allSeasonEntries = useMemo(() => {
-    const hist = seasonHistory.map((s) => ({
+    const hist = pastSeasons.map((s) => ({
       season: s.season,
       standings: s.standings || [],
       playoffWins: s.playoffWins || {},
@@ -5823,12 +5990,12 @@ function useLeagueSuperlatives(data, standings, usersById) {
     const current = {
       season: league?.season,
       standings: standings || [],
-      playoffWins: {},
+      playoffWins: currentResult?.playoffWins || {},
       highGame: currentHighGame,
       bestPlayerGame: currentSeasonSuper.bestPlayerGame || null,
     };
     return [...hist, current];
-  }, [seasonHistory, standings, currentSeasonSuper, rosters, usersById, league]);
+  }, [pastSeasons, standings, currentSeasonSuper, rosters, usersById, league, currentResult]);
 
   const allTimeSuperlatives = useMemo(() => {
     const career = {};
@@ -5907,7 +6074,7 @@ function useLeagueSuperlatives(data, standings, usersById) {
   // (playoff and consolation weeks skipped), ignoring unplayed 0-0 games.
   const gameRecords = useMemo(() => {
     const seasons = [
-      ...seasonHistory.map((s) => ({
+      ...pastSeasons.map((s) => ({
         season: s.season, weekMatchups: s.weekMatchups || {}, rosters: s.rosters || [],
         playoffWeekStart: s.playoffWeekStart || 15,
       })),
@@ -5967,7 +6134,7 @@ function useLeagueSuperlatives(data, standings, usersById) {
       if (!mostPA || pts > mostPA.points) mostPA = { ownerId, points: pts };
     });
     return { blowout, closest, lowGame, longestStreak, mostPA };
-  }, [seasonHistory, weekMatchups, rosters, league]);
+  }, [pastSeasons, weekMatchups, rosters, league]);
 
   const mostCareerPoints = useMemo(() => {
     const totals = {};
@@ -6065,6 +6232,16 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
   // Season-specific spots (banners, podiums, wall of shame) keep the name
   // they had that year.
   const currentUser = (u) => (u && usersById[u.user_id]) || u;
+  // An empty banner hangs for the current season until its champion is crowned.
+  const showOpenBanner =
+    !!league?.season && seasonType !== "off" && !orderedTitles.some((t) => String(t.season) === String(league.season));
+  const openBannerNote = (() => {
+    const pws = league?.settings?.playoff_week_start;
+    const teams = league?.settings?.playoff_teams;
+    if (!pws || !teams) return "Hanging soon";
+    const finalWeek = pws + Math.ceil(Math.log2(teams)) - 1;
+    return `Decided Week ${finalWeek}`;
+  })();
 
   function playerLabel(pid) {
     const p = players?.[pid];
@@ -6117,39 +6294,94 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
 
   return (
     <div>
-      {/* Champions banner strip */}
-      {orderedTitles.length > 0 && (
-        <div style={{ marginBottom: 20 }}>
+      {/* Champions banner strip: rafter banners */}
+      {(orderedTitles.length > 0 || showOpenBanner) && (
+        <div style={{ marginBottom: 22 }}>
           <SectionLabel>Champions</SectionLabel>
-          <div style={{ display: "flex", gap: 18, overflowX: "auto", padding: "10px 4px 12px" }}>
-            {orderedTitles.map((s) => (
-              <div key={s.season} style={{ display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0 }}>
-                <div style={{ width: 8, height: 8, borderRadius: "50%", background: COLORS.leather, marginBottom: -1, position: "relative", zIndex: 2 }} />
-                <div
-                  className="banner-pennant"
-                  style={{
-                    minWidth: 130,
-                    background: COLORS.turf,
-                    padding: "14px 14px 22px",
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "center",
-                    gap: 8,
-                    clipPath: "polygon(0 0, 100% 0, 100% 78%, 50% 100%, 0 78%)",
-                  }}
-                >
-                  <Crest name={teamName(s.champion)} logo={avatarUrl(s.champion)} size={38} />
-                  <div style={{ textAlign: "center" }}>
-                    <div style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 13, color: COLORS.yellow }}>
-                      {s.season}
+          <div style={{ overflowX: "auto", paddingBottom: 6 }}>
+            <div style={{ position: "relative", width: "max-content", minWidth: "100%" }}>
+            {/* the rafter */}
+            <div style={{ position: "absolute", left: 0, right: 0, top: 6, height: 6, background: "#1A1A1A", borderTop: "2px solid #DAAA00", borderRadius: 2 }} />
+            <div style={{ display: "flex", flexDirection: "row-reverse", justifyContent: "flex-end", gap: 22, padding: "6px 10px 0", position: "relative" }}>
+              {orderedTitles.map((s) => {
+                const champId = s.champion?.user_id;
+                const row = (s.standings || []).find((r) => r.ownerId === champId);
+                const record = row ? `${row.wins}-${row.losses}${row.ties ? `-${row.ties}` : ""}` : null;
+                const pf = row ? Math.round(row.fpts).toLocaleString() : null;
+                const realName = REAL_NAMES[(s.champion?.display_name || "").toLowerCase()];
+                return (
+                  <div key={s.season} className="banner-pennant" style={{ display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0 }}>
+                    {/* cords */}
+                    <div style={{ display: "flex", justifyContent: "space-between", width: 120, height: 16 }}>
+                      <div style={{ width: 2, background: "#CFB991", transform: "skewX(-14deg)" }} />
+                      <div style={{ width: 2, background: "#CFB991", transform: "skewX(14deg)" }} />
                     </div>
-                    <div style={{ fontSize: 12, color: COLORS.onTurf, marginTop: 2 }}>
-                      {teamName(s.champion)}
+                    {/* rod */}
+                    <div style={{ width: 186, height: 7, borderRadius: 4, background: "linear-gradient(180deg, #F0D77A, #DAAA00 55%, #8E6F3E)", position: "relative", zIndex: 2, boxShadow: "0 2px 3px rgba(0,0,0,0.25)" }} />
+                    {/* banner: gold trim layer, then green cloth */}
+                    <div className="rafter-banner" style={{ width: 172, marginTop: -2, padding: 4, background: "linear-gradient(180deg, #E8C766, #DAAA00 40%, #B58A00)", clipPath: "polygon(0 0, 100% 0, 100% 88%, 50% 100%, 0 88%)", filter: "drop-shadow(0 6px 8px rgba(0,0,0,0.25))" }}>
+                      <div style={{ position: "relative", background: "linear-gradient(180deg, #13603F 0%, #0E4D33 55%, #0A3924 100%)", clipPath: "polygon(0 0, 100% 0, 100% 88%, 50% 100%, 0 88%)", padding: "12px 10px 34px" }}>
+                        <div className="banner-sheen" />
+                        {/* stitching */}
+                        <div style={{ position: "absolute", top: 5, left: 5, right: 5, bottom: 30, border: "1px dashed rgba(207,185,145,0.55)", borderBottom: "none", pointerEvents: "none" }} />
+                        <div style={{ position: "relative", display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center" }}>
+                          <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, letterSpacing: "0.22em", color: "#CFB991" }}>LEAGUE CHAMPIONS</div>
+                          <div style={{ color: "#DAAA00", fontSize: 10, letterSpacing: "0.3em", marginTop: 3 }}>★★★</div>
+                          <div style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 36, lineHeight: 1, color: "#DAAA00", marginTop: 2, textShadow: "0 2px 0 rgba(0,0,0,0.35)" }}>
+                            {s.season}
+                          </div>
+                          <div style={{ marginTop: 10, borderRadius: "50%", padding: 3, background: "#DAAA00", boxShadow: "0 0 0 2px #0A3924, 0 0 12px rgba(218,170,0,0.45)" }}>
+                            <div style={{ borderRadius: "50%", overflow: "hidden", display: "flex" }}>
+                              <Crest name={teamName(s.champion)} logo={avatarUrl(s.champion)} size={46} />
+                            </div>
+                          </div>
+                          <div style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 14, color: "#FFFFFF", marginTop: 8, lineHeight: 1.15 }}>
+                            {teamName(s.champion)}
+                          </div>
+                          {realName && <div style={{ fontSize: 11, color: "rgba(255,255,255,0.7)", marginTop: 2 }}>{realName}</div>}
+                          {record && <div style={{ width: 56, height: 1, background: "rgba(207,185,145,0.6)", margin: "8px 0 6px" }} />}
+                          {record && (
+                            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10.5, color: "#CFB991" }}>
+                              {record} · {pf} PF
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+              {showOpenBanner && (
+                <div className="banner-pennant" style={{ display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", width: 120, height: 16 }}>
+                    <div style={{ width: 2, background: "#CFB991", transform: "skewX(-14deg)" }} />
+                    <div style={{ width: 2, background: "#CFB991", transform: "skewX(14deg)" }} />
+                  </div>
+                  <div style={{ width: 186, height: 7, borderRadius: 4, background: "linear-gradient(180deg, #F0D77A, #DAAA00 55%, #8E6F3E)", position: "relative", zIndex: 2, boxShadow: "0 2px 3px rgba(0,0,0,0.25)" }} />
+                  <div className="rafter-banner" style={{ width: 172, marginTop: -2, padding: 2, background: "rgba(181,138,0,0.55)", clipPath: "polygon(0 0, 100% 0, 100% 88%, 50% 100%, 0 88%)" }}>
+                    <div style={{ position: "relative", background: "linear-gradient(180deg, #FFFFFF, #F4F1E8)", clipPath: "polygon(0 0, 100% 0, 100% 88%, 50% 100%, 0 88%)", padding: "12px 10px 34px" }}>
+                      <div style={{ position: "absolute", top: 5, left: 5, right: 5, bottom: 30, border: "1px dashed rgba(181,138,0,0.5)", borderBottom: "none", pointerEvents: "none" }} />
+                      <div style={{ position: "relative", display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center" }}>
+                        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, letterSpacing: "0.22em", color: "#8E6F3E" }}>LEAGUE CHAMPIONS</div>
+                        <div style={{ color: "#B58A00", fontSize: 10, letterSpacing: "0.3em", marginTop: 3 }}>☆☆☆</div>
+                        <div style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 36, lineHeight: 1, color: "transparent", WebkitTextStroke: "1.5px #B58A00", marginTop: 2 }}>
+                          {league?.season}
+                        </div>
+                        <div style={{ marginTop: 10, width: 52, height: 52, borderRadius: "50%", border: "2px dashed #B58A00", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Archivo Black', sans-serif", fontSize: 22, color: "#B58A00" }}>
+                          ?
+                        </div>
+                        <div style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 14, color: COLORS.turf, marginTop: 8 }}>Up for grabs</div>
+                        <div style={{ width: 56, height: 1, background: "rgba(181,138,0,0.5)", margin: "8px 0 6px" }} />
+                        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10.5, color: COLORS.muted }}>
+                          {openBannerNote}
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              )}
+            </div>
+            </div>
           </div>
         </div>
       )}
@@ -6397,7 +6629,7 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
   );
 }
 
-const SUPERLATIVE_ACCENTS = ["#FF6B00", "#0E4D33", "#B8860B", "#7B4B27", "#3F7A63", "#C1490A", "#5A371C", "#D9560A"];
+const SUPERLATIVE_ACCENTS = ["#B58A00", "#0E4D33", "#E35F00", "#1A1A1A", "#8E6F3E", "#3F7A63", "#B58A00", "#0E4D33"];
 
 function SuperlativeCard({ label, value, user, accent, sublabel, note }) {
   return (
@@ -6575,11 +6807,11 @@ const SCORING_CATEGORIES = {
 };
 const SCORING_CATEGORY_ORDER = ["Passing", "Rushing & receiving", "Kicking", "Defense & special teams", "Other"];
 const CATEGORY_ACCENTS = {
-  "Passing": "#C1490A",
+  "Passing": "#9D7A2E",
   "Rushing & receiving": "#0E4D33",
   "Kicking": "#B8860B",
-  "Defense & special teams": "#5A371C",
-  "Other": "#6B7A70",
+  "Defense & special teams": "#5E4A29",
+  "Other": "#6F727B",
 };
 
 function humanizeKey(key) {
