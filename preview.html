@@ -379,6 +379,7 @@ function useLeagueData(leagueId) {
         });
         const byMatchupId = {};
         (matchups || []).forEach((m) => {
+          if (m.matchup_id == null) return; // byes / eliminated teams in playoff weeks
           if (!byMatchupId[m.matchup_id]) byMatchupId[m.matchup_id] = [];
           byMatchupId[m.matchup_id].push(m);
         });
@@ -606,6 +607,7 @@ function useLeagueData(leagueId) {
         }
 
         const seasonHistory = await walkHistory(league);
+        const currentBracket = await j(`${API}/league/${leagueId}/winners_bracket`).catch(() => []);
 
         // Draft pick ownership: Sleeper only returns picks that have been
         // traded away from their original owner; anything not in this list
@@ -670,6 +672,7 @@ function useLeagueData(leagueId) {
             prevLeague,
             prevWinnerRosterId,
             seasonHistory,
+            currentBracket: Array.isArray(currentBracket) ? currentBracket : [],
             weekMatchups,
             tradedPicks,
             draftRounds,
@@ -903,6 +906,7 @@ function computeH2HFromWeeks(weekMatchups, rosters, usersById) {
   Object.values(weekMatchups || {}).forEach((matchups) => {
     const byMatchupId = {};
     (matchups || []).forEach((m) => {
+      if (m.matchup_id == null) return; // byes / eliminated teams in playoff weeks
       if (!byMatchupId[m.matchup_id]) byMatchupId[m.matchup_id] = [];
       byMatchupId[m.matchup_id].push(m);
     });
@@ -973,6 +977,7 @@ function computeStreaks(weekMatchups, rosters) {
     const matchups = weekMatchups[week] || [];
     const byMatchupId = {};
     matchups.forEach((m) => {
+      if (m.matchup_id == null) return; // byes / eliminated teams in playoff weeks
       if (!byMatchupId[m.matchup_id]) byMatchupId[m.matchup_id] = [];
       byMatchupId[m.matchup_id].push(m);
     });
@@ -2085,6 +2090,7 @@ function MatchupsTab({ matchups, rostersById, usersById, week, seasonType }) {
   const grouped = useMemo(() => {
     const byMatchupId = {};
     matchups.forEach((m) => {
+      if (m.matchup_id == null) return; // byes / eliminated teams in playoff weeks
       if (!byMatchupId[m.matchup_id]) byMatchupId[m.matchup_id] = [];
       byMatchupId[m.matchup_id].push(m);
     });
@@ -2447,6 +2453,7 @@ function PlayoffOdds({ data }) {
 function groupByMatchupId(matchups) {
   const byMatchupId = {};
   (matchups || []).forEach((m) => {
+    if (m.matchup_id == null) return; // byes / eliminated teams in playoff weeks
     if (!byMatchupId[m.matchup_id]) byMatchupId[m.matchup_id] = [];
     byMatchupId[m.matchup_id].push(m);
   });
@@ -5851,7 +5858,44 @@ function HistoryTab({ rostersById, usersById, standings, seasonHistory, superlat
 // wall of shame, and the 8 league-wide superlative titles) computed once
 // from a single source of truth, so both pages always agree on who holds what.
 function useLeagueSuperlatives(data, standings, usersById) {
-  const { league, seasonHistory, weekMatchups, rosters, users } = data;
+  const { league, weekMatchups, rosters, users } = data;
+  const pastSeasons = data.seasonHistory;
+
+  // Once this season's final is played, treat it like a completed season
+  // right away (banner, titles, podium, wall of shame) instead of waiting
+  // for Sleeper to roll the league over to next year.
+  const currentResult = useMemo(() => {
+    const br = data.currentBracket || [];
+    const final = br.find((m) => m.p === 1 && m.w);
+    if (!final || !league?.season) return null;
+    const ownerOfRoster = (rid) => usersById[rosters.find((r) => r.roster_id === rid)?.owner_id] || null;
+    const thirdMatch = br.find((m) => m.p === 3 && m.w);
+    const last = standings[standings.length - 1];
+    const playoffWins = {}, playoffLosses = {};
+    br.forEach((m) => {
+      const w = ownerOfRoster(m.w), l = ownerOfRoster(m.l);
+      if (w) playoffWins[w.user_id] = (playoffWins[w.user_id] || 0) + 1;
+      if (l) playoffLosses[l.user_id] = (playoffLosses[l.user_id] || 0) + 1;
+    });
+    return {
+      season: league.season,
+      champion: ownerOfRoster(final.w),
+      runnerUp: ownerOfRoster(final.l),
+      third: thirdMatch ? ownerOfRoster(thirdMatch.w) : null,
+      lastPlace: last ? ownerOfRoster(last.rosterId) : null,
+      standings,
+      users,
+      rosters,
+      playoffWins,
+      playoffLosses,
+      isCurrent: true,
+    };
+  }, [data.currentBracket, league, rosters, usersById, standings, users]);
+
+  const seasonHistory = useMemo(
+    () => (currentResult && !pastSeasons.some((s) => String(s.season) === String(currentResult.season)) ? [...pastSeasons, currentResult] : pastSeasons),
+    [pastSeasons, currentResult]
+  );
 
   const championsByOwner = useMemo(() => {
     const map = {};
@@ -5875,6 +5919,7 @@ function useLeagueSuperlatives(data, standings, usersById) {
     Object.entries(weekMatchups || {}).forEach(([week, matchups]) => {
       const byMatchupId = {};
       matchups.forEach((m) => {
+        if (m.matchup_id == null) return; // byes / eliminated teams in playoff weeks
         if (!byMatchupId[m.matchup_id]) byMatchupId[m.matchup_id] = [];
         byMatchupId[m.matchup_id].push(m);
       });
@@ -5925,7 +5970,7 @@ function useLeagueSuperlatives(data, standings, usersById) {
   }, [seasonHistory, users]);
 
   const allSeasonEntries = useMemo(() => {
-    const hist = seasonHistory.map((s) => ({
+    const hist = pastSeasons.map((s) => ({
       season: s.season,
       standings: s.standings || [],
       playoffWins: s.playoffWins || {},
@@ -5941,12 +5986,12 @@ function useLeagueSuperlatives(data, standings, usersById) {
     const current = {
       season: league?.season,
       standings: standings || [],
-      playoffWins: {},
+      playoffWins: currentResult?.playoffWins || {},
       highGame: currentHighGame,
       bestPlayerGame: currentSeasonSuper.bestPlayerGame || null,
     };
     return [...hist, current];
-  }, [seasonHistory, standings, currentSeasonSuper, rosters, usersById, league]);
+  }, [pastSeasons, standings, currentSeasonSuper, rosters, usersById, league, currentResult]);
 
   const allTimeSuperlatives = useMemo(() => {
     const career = {};
@@ -6025,7 +6070,7 @@ function useLeagueSuperlatives(data, standings, usersById) {
   // (playoff and consolation weeks skipped), ignoring unplayed 0-0 games.
   const gameRecords = useMemo(() => {
     const seasons = [
-      ...seasonHistory.map((s) => ({
+      ...pastSeasons.map((s) => ({
         season: s.season, weekMatchups: s.weekMatchups || {}, rosters: s.rosters || [],
         playoffWeekStart: s.playoffWeekStart || 15,
       })),
@@ -6085,7 +6130,7 @@ function useLeagueSuperlatives(data, standings, usersById) {
       if (!mostPA || pts > mostPA.points) mostPA = { ownerId, points: pts };
     });
     return { blowout, closest, lowGame, longestStreak, mostPA };
-  }, [seasonHistory, weekMatchups, rosters, league]);
+  }, [pastSeasons, weekMatchups, rosters, league]);
 
   const mostCareerPoints = useMemo(() => {
     const totals = {};
@@ -6249,10 +6294,11 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
       {(orderedTitles.length > 0 || showOpenBanner) && (
         <div style={{ marginBottom: 22 }}>
           <SectionLabel>Champions</SectionLabel>
-          <div style={{ position: "relative", overflowX: "auto", paddingBottom: 6 }}>
+          <div style={{ overflowX: "auto", paddingBottom: 6 }}>
+            <div style={{ position: "relative", width: "max-content", minWidth: "100%" }}>
             {/* the rafter */}
             <div style={{ position: "absolute", left: 0, right: 0, top: 6, height: 6, background: "#1A1A1A", borderTop: "2px solid #DAAA00", borderRadius: 2 }} />
-            <div style={{ display: "flex", gap: 22, padding: "6px 10px 0", position: "relative" }}>
+            <div style={{ display: "flex", flexDirection: "row-reverse", justifyContent: "flex-end", gap: 22, padding: "6px 10px 0", position: "relative" }}>
               {orderedTitles.map((s) => {
                 const champId = s.champion?.user_id;
                 const row = (s.standings || []).find((r) => r.ownerId === champId);
@@ -6330,6 +6376,7 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
                   </div>
                 </div>
               )}
+            </div>
             </div>
           </div>
         </div>
