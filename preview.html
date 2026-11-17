@@ -2705,6 +2705,144 @@ function PlayoffBracket({ data, standings, usersById, archive }) {
   );
 }
 
+
+// ---- Season drafts (History) ----
+// Every draft Sleeper has for a season (startup/veteran and rookie drafts
+// are separate), loaded when that season is opened in History. Finished
+// drafts are saved in the browser. Each pick shows where the player is now.
+const DRAFT_TYPE_LABELS = { 1: "Rookie draft", 2: "Veteran draft" };
+
+function SeasonDrafts({ season, leagueId, seasonUsers, seasonRosters, data }) {
+  const [drafts, setDrafts] = useState(null);
+  const [active, setActive] = useState(0);
+  const [round, setRound] = useState(1);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const list = await fetch(`${API}/league/${leagueId}/drafts`).then((r) => (r.ok ? r.json() : []));
+        const loaded = await Promise.all(
+          (list || []).map(async (d) => {
+            const key = `draft_v1_${d.draft_id}`;
+            if (d.status === "complete") {
+              const cached = await idbGet(key);
+              if (cached) return cached;
+            }
+            const [detail, picks] = await Promise.all([
+              fetch(`${API}/draft/${d.draft_id}`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+              fetch(`${API}/draft/${d.draft_id}/picks`).then((r) => (r.ok ? r.json() : [])).catch(() => []),
+            ]);
+            const built = {
+              id: d.draft_id,
+              type: detail?.settings?.player_type,
+              rounds: detail?.settings?.rounds || d.settings?.rounds,
+              teams: detail?.settings?.teams || 12,
+              start: detail?.start_time || d.start_time || null,
+              slotToRoster: detail?.slot_to_roster_id || {},
+              picks: (picks || []).map((p) => ({ round: p.round, pickNo: p.pick_no, playerId: p.player_id, rosterId: p.roster_id, slot: p.draft_slot })),
+            };
+            if (d.status === "complete" && built.picks.length) idbSet(key, built);
+            return built;
+          })
+        );
+        if (cancelled) return;
+        const withPicks = loaded.filter((d) => d && d.picks.length).sort((a, b) => (a.start || 0) - (b.start || 0));
+        setDrafts(withPicks);
+        // open on the rookie draft when there is one
+        const rookieIdx = withPicks.findIndex((d) => d.type === 1);
+        setActive(rookieIdx >= 0 ? rookieIdx : 0);
+        setRound(1);
+      } catch (e) {
+        if (!cancelled) setDrafts([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [leagueId]);
+
+  if (!drafts || drafts.length === 0) return null;
+  const draft = drafts[Math.min(active, drafts.length - 1)];
+  const players = data.players || {};
+  const seasonUserById = Object.fromEntries((seasonUsers || []).map((u) => [u.user_id, u]));
+  const seasonOwnerOfRoster = (rid) => seasonUserById[(seasonRosters || []).find((r) => r.roster_id === rid)?.owner_id];
+  // where each player is today
+  const currentHolder = {};
+  (data.rosters || []).forEach((r) => (r.players || []).forEach((pid) => { currentHolder[pid] = r.owner_id; }));
+  const currentUserById = Object.fromEntries((data.users || []).map((u) => [u.user_id, u]));
+
+  const roundPicks = draft.picks.filter((p) => p.round === round).sort((a, b) => a.pickNo - b.pickNo);
+  const label = (d) => DRAFT_TYPE_LABELS[d.type] || "Draft";
+  const dateLabel = (d) => (d.start ? new Date(d.start).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : null);
+  const chip = (activeNow) => ({
+    fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, padding: "5px 10px", borderRadius: 6, cursor: "pointer",
+    border: `1px solid ${activeNow ? COLORS.turf : COLORS.hairline}`,
+    background: activeNow ? COLORS.turfTint : "transparent",
+    color: activeNow ? COLORS.turf : COLORS.muted, fontWeight: activeNow ? 600 : 400,
+  });
+
+  return (
+    <div style={{ marginTop: 22 }}>
+      <SectionLabel>{season} drafts</SectionLabel>
+      <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
+        Every pick, who made it, and where that player is now. Draft classes only get more fun to look back on.
+      </div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+        {drafts.map((d, i) => (
+          <button key={d.id} onClick={() => { setActive(i); setRound(1); }} style={chip(i === active)}>
+            {label(d)}{dateLabel(d) ? ` · ${dateLabel(d)}` : ""}
+          </button>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 10 }}>
+        {Array.from({ length: draft.rounds || Math.max(...draft.picks.map((p) => p.round)) }, (_, i) => i + 1).map((r) => (
+          <button key={r} onClick={() => setRound(r)} style={{ ...chip(r === round), padding: "4px 9px" }}>Rd {r}</button>
+        ))}
+      </div>
+      <Card style={{ padding: 0, overflow: "hidden" }}>
+        {roundPicks.map((p, i) => {
+          const pl = players[p.playerId];
+          const name = pl ? `${pl.first_name || ""} ${pl.last_name || ""}`.trim() : p.playerId;
+          const pc = positionColor(pl?.position);
+          const drafter = seasonOwnerOfRoster(p.rosterId);
+          const originalRid = draft.slotToRoster[p.slot];
+          const via = originalRid != null && originalRid !== p.rosterId ? seasonOwnerOfRoster(originalRid) : null;
+          const nowOwnerId = currentHolder[p.playerId];
+          const drafterOwnerId = drafter?.user_id;
+          const nowUser = nowOwnerId ? currentUserById[nowOwnerId] : null;
+          const pickInRound = ((p.pickNo - 1) % (draft.teams || 12)) + 1;
+          let status;
+          if (!nowOwnerId) status = { text: "Not on a roster", color: COLORS.muted };
+          else if (nowOwnerId === drafterOwnerId) status = { text: "Still on the team", color: COLORS.turf };
+          else status = { text: `Now: ${nowUser ? teamName(nowUser) : "another team"}`, color: COLORS.goldDim };
+          return (
+            <div key={p.pickNo} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", borderTop: i ? `1px solid ${COLORS.hairline}` : "none", flexWrap: "wrap" }}>
+              <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, fontWeight: 600, color: COLORS.turf, width: 38 }}>
+                {p.round}.{String(pickInRound).padStart(2, "0")}
+              </span>
+              <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, fontWeight: 600, padding: "2px 6px", borderRadius: 4, background: pc.bg, color: pc.fg, minWidth: 26, textAlign: "center" }}>
+                {pl?.position || "?"}
+              </span>
+              <span style={{ fontWeight: 600, fontSize: 13.5, color: COLORS.bone, minWidth: 140, flex: "1 1 160px" }}>
+                {name}
+                {isBoilermaker(pl) && <span style={{ marginLeft: 6 }}><BoilerTag /></span>}
+                <span style={{ fontSize: 11, color: COLORS.muted, fontWeight: 400, marginLeft: 6 }}>{pl?.team || ""}</span>
+              </span>
+              <span style={{ display: "flex", alignItems: "center", gap: 6, flex: "1 1 180px", minWidth: 0 }}>
+                {drafter && <Crest name={teamName(drafter)} logo={avatarUrl(drafter)} size={18} />}
+                <span style={{ fontSize: 12.5, color: COLORS.bone, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {drafter ? teamName(drafter) : "?"}
+                  {via && <span style={{ color: COLORS.muted }}> (via {teamName(via)})</span>}
+                </span>
+              </span>
+              <span style={{ fontSize: 11.5, color: status.color, fontWeight: 600, whiteSpace: "nowrap", marginLeft: "auto" }}>{status.text}</span>
+            </div>
+          );
+        })}
+      </Card>
+    </div>
+  );
+}
+
 // ---- Weekly Recap ----
 // Template-based recap generator: real results and stats plugged into a
 // small bank of phrase variants so the tone stays consistent week to week
@@ -5766,6 +5904,7 @@ function buildSeasonHistoryData(summary, players, ownerDirectory) {
   const teamRows = summary.standings.map((s, i) => ({
     rank: i + 1,
     ownerId: s.ownerId,
+    rosterId: s.rosterId,
     displayName: s.displayName,
     name: s.name,
     avatar: s.avatar,
@@ -5980,6 +6119,23 @@ function HistoryTab({ rostersById, usersById, standings, seasonHistory, superlat
   const historyData = selectedSummary ? buildSeasonHistoryData(selectedSummary, players, ownerDirectory) : null;
   const seasonNarrative = selectedSummary ? buildSeasonRecapNarrative(selectedSummary, players, ownerDirectory) : [];
 
+  // Playoff seeds for the selected season, using the same rules as Standings.
+  // Only teams that actually appear in that year's bracket get a seed.
+  const selectedPast = selectedSummary ? (seasonHistory || []).find((s) => String(s.season) === String(selectedSummary.season)) : null;
+  const seedInfo = useMemo(() => {
+    if (!selectedSummary) return null;
+    const bracket = selectedPast ? selectedPast.bracket : data?.currentBracket;
+    if (!bracket || !bracket.length) return null;
+    const rosters = selectedPast ? selectedPast.rosters : data?.rosters;
+    const divs = selectedPast ? selectedPast.divisions : data?.league?.settings?.divisions;
+    const seeds = computeSeeds(selectedSummary.standings || [], rosters, divs > 1 ? divs : 0);
+    const minRound = Math.min(...bracket.map((m) => m.r));
+    const inBracket = new Set(bracket.flatMap((m) => [m.t1, m.t2]).filter((x) => x != null));
+    const roundOne = new Set(bracket.filter((m) => m.r === minRound).flatMap((m) => [m.t1, m.t2]));
+    const byes = new Set([...inBracket].filter((x) => !roundOne.has(x)));
+    return { seeds, inBracket, byes };
+  }, [selectedSummary, selectedPast, data]);
+
   if (seasonSummaries.every((s) => s.standings.length === 0)) {
     return (
       <div>
@@ -6068,7 +6224,7 @@ function HistoryTab({ rostersById, usersById, standings, seasonHistory, superlat
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
                     <tr style={{ background: COLORS.surfaceLight }}>
-                      {["#", "Team", "W", "L", "T", "PF", "PA", "Diff"].map((h, i) => (
+                      {["#", "Team", ...(seedInfo ? ["Seed"] : []), "W", "L", "T", "PF", "PA", "Diff"].map((h, i) => (
                         <th
                           key={h}
                           style={{
@@ -6098,6 +6254,20 @@ function HistoryTab({ rostersById, usersById, standings, seasonHistory, superlat
                             <span style={{ fontSize: 13, fontWeight: 600 }}>{t.displayName}</span>
                           </div>
                         </td>
+                        {seedInfo && (
+                          <td style={{ padding: "7px 12px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, whiteSpace: "nowrap" }}>
+                            {seedInfo.inBracket.has(t.rosterId) ? (
+                              <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: COLORS.turf, fontWeight: 600 }}>
+                                {seedInfo.byes.has(t.rosterId) && (
+                                  <span style={{ fontSize: 10, fontWeight: 700, color: "#FFFFFF", background: COLORS.pylon, borderRadius: 999, padding: "1px 6px" }}>BYE</span>
+                                )}
+                                <span style={{ minWidth: 14, textAlign: "right" }}>{seedInfo.seeds[t.rosterId]}</span>
+                              </span>
+                            ) : (
+                              <span style={{ color: COLORS.muted }}>-</span>
+                            )}
+                          </td>
+                        )}
                         <td style={{ padding: "7px 12px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace", fontSize: 13 }}>{t.wins}</td>
                         <td style={{ padding: "7px 12px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace", fontSize: 13 }}>{t.losses}</td>
                         <td style={{ padding: "7px 12px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace", fontSize: 13 }}>{t.ties}</td>
@@ -6129,6 +6299,17 @@ function HistoryTab({ rostersById, usersById, standings, seasonHistory, superlat
         }
         return null;
       })()}
+
+      {selectedSummary && data && (
+        <SeasonDrafts
+          key={selectedSummary.season}
+          season={selectedSummary.season}
+          leagueId={selectedPast ? selectedPast.leagueId : data.league?.league_id || LEAGUE_ID}
+          seasonUsers={selectedPast ? selectedPast.users : data.users}
+          seasonRosters={selectedPast ? selectedPast.rosters : data.rosters}
+          data={data}
+        />
+      )}
     </div>
   );
 }
