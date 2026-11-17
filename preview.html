@@ -203,6 +203,8 @@ textarea:hover, textarea:focus { border-color: #0E4D33; outline: none; }
   .sup-name { font-size: 12.5px !important; }
   .sup-sub, .sup-note { font-size: 10.5px !important; }
   .rafter-scale { zoom: 0.8; }
+  .m-folded > .m-fold-body { display: none; }
+  .m-toggle { width: 100%; text-align: left; margin: 2px 0 4px; padding: 9px 12px; border-radius: 8px; border: 1px solid rgba(0,0,0,0.14); background: #F2F0EB; font-family: 'IBM Plex Mono', monospace; font-size: 12px; font-weight: 700; color: #0E4D33; cursor: pointer; }
 }
 `;
 
@@ -4563,11 +4565,13 @@ function RostersTab({ rosters, usersById, players, selectedRosterId, setSelected
               </div>
               <div>
                 <SectionLabel>Bench</SectionLabel>
+                <MobileToggle label={`Show bench (${(roster.players || []).filter((pid) => !(roster.starters || []).includes(pid)).length})`}>
                 {(roster.players || [])
                   .filter((pid) => !(roster.starters || []).includes(pid))
                   .map((pid, i) => (
                     <PlayerRow key={i} info={playerInfo(pid)} first={i === 0} muted />
                   ))}
+                </MobileToggle>
               </div>
             </div>
           </Card>
@@ -4843,6 +4847,33 @@ function MobileCollapse({ children }) {
   );
 }
 
+// On phones, tucks a block behind a "Show ..." button. Desktop always shows it.
+function MobileToggle({ label, children }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className={open ? "" : "m-folded"}>
+      {!open && (
+        <button className="mobile-only m-toggle" onClick={() => setOpen(true)}>
+          {label} ▾
+        </button>
+      )}
+      <div className="m-fold-body">{children}</div>
+    </div>
+  );
+}
+function useIsPhone() {
+  const q = "(max-width: 640px)";
+  const [phone, setPhone] = useState(() => (typeof window !== "undefined" && window.matchMedia ? window.matchMedia(q).matches : false));
+  useEffect(() => {
+    if (!window.matchMedia) return;
+    const m = window.matchMedia(q);
+    const on = () => setPhone(m.matches);
+    m.addEventListener ? m.addEventListener("change", on) : m.addListener(on);
+    return () => (m.removeEventListener ? m.removeEventListener("change", on) : m.removeListener(on));
+  }, []);
+  return phone;
+}
+
 function PlayerRow({ info, first, muted }) {
   const pc = positionColor(info.position);
   return (
@@ -4910,7 +4941,8 @@ function TradesTab({ transactions, rostersById, usersById, players, seasonHistor
   const [filterOwnerId, setFilterOwnerId] = useState("all");
   const [viewMode, setViewMode] = useState("trades");
   const [traderSeasonFilter, setTraderSeasonFilter] = useState("all");
-  const PAGE_SIZE = 8;
+  const isPhone = useIsPhone();
+  const PAGE_SIZE = isPhone ? 4 : 8;
   const isActiveSeason = seasonType === "regular" || seasonType === "post";
 
   const availableSeasons = useMemo(() => {
@@ -5167,6 +5199,7 @@ function TradesTab({ transactions, rostersById, usersById, players, seasonHistor
             </div>
           </div>
           {traderLeaderboardCounts.length > 0 ? (
+            <MobileToggle label="Show most active traders">
             <BalancedGrid
               gap={10}
               minWidth={220}
@@ -5183,6 +5216,7 @@ function TradesTab({ transactions, rostersById, usersById, players, seasonHistor
                 ),
               }))}
             />
+            </MobileToggle>
           ) : (
             <Card>
               <div style={{ color: COLORS.muted, fontSize: 13 }}>No trades that season.</div>
@@ -5723,7 +5757,7 @@ function DraftPicksTab({ rosters, usersById, tradedPicks, draftRounds, currentSe
               <Card style={{ borderLeft: `3px solid ${teamColor(teamName(t.owner))}` }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
                   <Crest name={teamName(t.owner)} logo={avatarUrl(t.owner)} size={28} />
-                  <span style={{ fontWeight: 600, fontSize: 14 }}>{withOwner(t.owner)}</span>
+                  <NameLabel label={withOwner(t.owner)} style={{ fontWeight: 600, fontSize: 14 }} />
                   <span style={{ marginLeft: "auto", fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: COLORS.muted }}>
                     {t.picks.length} picks
                   </span>
@@ -5731,6 +5765,7 @@ function DraftPicksTab({ rosters, usersById, tradedPicks, draftRounds, currentSe
                 {t.picks.length === 0 ? (
                   <div style={{ color: COLORS.muted, fontSize: 13, borderLeft: `3px solid ${COLORS.leather}`, paddingLeft: 10 }}>No picks on record.</div>
                 ) : (
+                  <MobileToggle label="Show picks">
                   <div style={{ display: "flex", flexDirection: "column" }}>
                     {t.picks.map((p, i) => {
                       const isOwn = p.originalRosterId === p.currentRosterId;
@@ -5751,6 +5786,7 @@ function DraftPicksTab({ rosters, usersById, tradedPicks, draftRounds, currentSe
                       );
                     })}
                   </div>
+                  </MobileToggle>
                 )}
               </Card>
             ),
