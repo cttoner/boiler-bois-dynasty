@@ -70,6 +70,14 @@ textarea:hover, textarea:focus { border-color: #0E4D33; outline: none; }
   0%, 100% { transform: rotate(-2.5deg); }
   50% { transform: rotate(2.5deg); }
 }
+.rafter-banner { position: relative; transition: transform 0.2s ease; }
+.rafter-banner:hover { transform: translateY(-3px); }
+.banner-sheen { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.banner-sheen::after { content: ""; position: absolute; top: -20%; bottom: -20%; width: 40%; left: -60%;
+  background: linear-gradient(100deg, transparent, rgba(255,255,255,0.16), transparent);
+  transform: skewX(-12deg); animation: bannerSheen 7s ease-in-out 1.2s infinite; }
+@keyframes bannerSheen { 0% { left: -60%; } 22% { left: 130%; } 100% { left: 130%; } }
+@media (prefers-reduced-motion: reduce) { .banner-pennant, .banner-sheen::after { animation: none; } }
 .banner-pennant {
   transform-origin: top center;
   animation: bannerSway 3.4s ease-in-out infinite;
@@ -6227,39 +6235,68 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
 
   return (
     <div>
-      {/* Champions banner strip */}
+      {/* Champions banner strip: rafter banners */}
       {orderedTitles.length > 0 && (
-        <div style={{ marginBottom: 20 }}>
+        <div style={{ marginBottom: 22 }}>
           <SectionLabel>Champions</SectionLabel>
-          <div style={{ display: "flex", gap: 18, overflowX: "auto", padding: "10px 4px 12px" }}>
-            {orderedTitles.map((s) => (
-              <div key={s.season} style={{ display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0 }}>
-                <div style={{ width: 8, height: 8, borderRadius: "50%", background: COLORS.leather, marginBottom: -1, position: "relative", zIndex: 2 }} />
-                <div
-                  className="banner-pennant"
-                  style={{
-                    minWidth: 130,
-                    background: COLORS.turf,
-                    padding: "14px 14px 22px",
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "center",
-                    gap: 8,
-                    clipPath: "polygon(0 0, 100% 0, 100% 78%, 50% 100%, 0 78%)",
-                  }}
-                >
-                  <Crest name={teamName(s.champion)} logo={avatarUrl(s.champion)} size={38} />
-                  <div style={{ textAlign: "center" }}>
-                    <div style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 13, color: COLORS.yellow }}>
-                      {s.season}
+          <div style={{ position: "relative", overflowX: "auto", paddingBottom: 6 }}>
+            {/* the rafter */}
+            <div style={{ position: "absolute", left: 0, right: 0, top: 6, height: 6, background: "#1A1A1A", borderTop: "2px solid #DAAA00", borderRadius: 2 }} />
+            <div style={{ display: "flex", gap: 22, padding: "6px 10px 0", position: "relative" }}>
+              {orderedTitles.map((s) => {
+                const champId = s.champion?.user_id;
+                const row = (s.standings || []).find((r) => r.ownerId === champId);
+                const record = row ? `${row.wins}-${row.losses}${row.ties ? `-${row.ties}` : ""}` : null;
+                const pf = row ? Math.round(row.fpts).toLocaleString() : null;
+                const realName = REAL_NAMES[(s.champion?.display_name || "").toLowerCase()];
+                return (
+                  <div key={s.season} className="banner-pennant" style={{ display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0 }}>
+                    {/* cords */}
+                    <div style={{ display: "flex", justifyContent: "space-between", width: 120, height: 16 }}>
+                      <div style={{ width: 2, background: "#CFB991", transform: "skewX(-14deg)" }} />
+                      <div style={{ width: 2, background: "#CFB991", transform: "skewX(14deg)" }} />
                     </div>
-                    <div style={{ fontSize: 12, color: COLORS.onTurf, marginTop: 2 }}>
-                      {teamName(s.champion)}
+                    {/* rod */}
+                    <div style={{ width: 186, height: 7, borderRadius: 4, background: "linear-gradient(180deg, #F0D77A, #DAAA00 55%, #8E6F3E)", position: "relative", zIndex: 2, boxShadow: "0 2px 3px rgba(0,0,0,0.25)" }} />
+                    {/* banner: gold trim layer, then green cloth */}
+                    <div className="rafter-banner" style={{ width: 172, marginTop: -2, padding: 4, background: "linear-gradient(180deg, #E8C766, #DAAA00 40%, #B58A00)", clipPath: "polygon(0 0, 100% 0, 100% 88%, 50% 100%, 0 88%)", filter: "drop-shadow(0 6px 8px rgba(0,0,0,0.25))" }}>
+                      <div style={{ position: "relative", background: "linear-gradient(180deg, #13603F 0%, #0E4D33 55%, #0A3924 100%)", clipPath: "polygon(0 0, 100% 0, 100% 88%, 50% 100%, 0 88%)", padding: "12px 10px 34px" }}>
+                        <div className="banner-sheen" />
+                        {/* stitching */}
+                        <div style={{ position: "absolute", top: 5, left: 5, right: 5, bottom: 30, border: "1px dashed rgba(207,185,145,0.55)", borderBottom: "none", pointerEvents: "none" }} />
+                        <div style={{ position: "relative", display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center" }}>
+                          <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, letterSpacing: "0.22em", color: "#CFB991" }}>LEAGUE CHAMPIONS</div>
+                          <div style={{ color: "#DAAA00", fontSize: 10, letterSpacing: "0.3em", marginTop: 3 }}>★★★</div>
+                          <div style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 36, lineHeight: 1, color: "#DAAA00", marginTop: 2, textShadow: "0 2px 0 rgba(0,0,0,0.35)" }}>
+                            {s.season}
+                          </div>
+                          <div style={{ marginTop: 10, borderRadius: "50%", padding: 3, background: "#DAAA00", boxShadow: "0 0 0 2px #0A3924, 0 0 12px rgba(218,170,0,0.45)" }}>
+                            <div style={{ borderRadius: "50%", overflow: "hidden", display: "flex" }}>
+                              <Crest name={teamName(s.champion)} logo={avatarUrl(s.champion)} size={46} />
+                            </div>
+                          </div>
+                          <div style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 14, color: "#FFFFFF", marginTop: 8, lineHeight: 1.15 }}>
+                            {teamName(s.champion)}
+                          </div>
+                          {realName && <div style={{ fontSize: 11, color: "rgba(255,255,255,0.7)", marginTop: 2 }}>{realName}</div>}
+                          {(record || s.runnerUp) && <div style={{ width: 56, height: 1, background: "rgba(207,185,145,0.6)", margin: "8px 0 6px" }} />}
+                          {record && (
+                            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10.5, color: "#CFB991" }}>
+                              {record} · {pf} PF
+                            </div>
+                          )}
+                          {s.runnerUp && (
+                            <div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.75)", marginTop: 3 }}>
+                              def. {teamName(s.runnerUp)}
+                            </div>
+                          )}
+                        </div>
+                      </div>
                     </div>
                   </div>
-                </div>
-              </div>
-            ))}
+                );
+              })}
+            </div>
           </div>
         </div>
       )}
