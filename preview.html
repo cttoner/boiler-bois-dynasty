@@ -180,6 +180,11 @@ textarea:hover, textarea:focus { border-color: #0E4D33; outline: none; }
   .sortable-table .col-ties, .sortable-table .col-fptsAgainst, .sortable-table .col-streak, .sortable-table .col-luck { display: none; }
   .standings-season .col-winPct { display: none; }
   .m-hide { display: none !important; }
+  .sortable-table td.col-team { font-family: 'Inter', sans-serif !important; font-size: 13px; }
+  .sortable-table .col-rank { display: none; }
+  .sortable-table .col-team .name-label { display: inline-block; max-width: 118px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
+  .sortable-table .div-tag { display: none; }
+  .sortable-table .col-team > div { gap: 7px !important; }
   .odds-bar { display: none !important; }
   /* 2. long reading collapses */
   .m-clamp .m-clamp-body { max-height: 8.6em; overflow: hidden; -webkit-mask-image: linear-gradient(180deg, #000 55%, transparent); mask-image: linear-gradient(180deg, #000 55%, transparent); }
@@ -1875,7 +1880,7 @@ function StandingsTab({ standings, playoffTeams, data, usersById }) {
           <Crest name={r.name} logo={r.avatar} size={24} />
           <NameLabel label={r.displayName} style={{ fontWeight: 600, color: r.isPlayoffPosition ? COLORS.turf : COLORS.bone }} />
           {divisionCount && r.division ? (
-            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: COLORS.muted, border: `1px solid ${COLORS.hairline}`, borderRadius: 4, padding: "1px 5px" }}>
+            <span className="div-tag" style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: COLORS.muted, border: `1px solid ${COLORS.hairline}`, borderRadius: 4, padding: "1px 5px" }}>
               D{r.division}
             </span>
           ) : null}
@@ -4815,7 +4820,7 @@ function NameLabel({ label, style }) {
   const team = i > 0 ? text.slice(0, i) : text;
   const mgr = i > 0 ? text.slice(i) : "";
   return (
-    <span style={style}>
+    <span className="name-label" style={style}>
       {team}
       {mgr && <span className="mgr-name">{mgr}</span>}
     </span>
