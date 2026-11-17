@@ -219,6 +219,9 @@ textarea:hover, textarea:focus { border-color: #0E4D33; outline: none; }
   .rules-glance > div > div:last-child { font-size: 14px !important; white-space: nowrap; }
   .rules-scoring { grid-template-columns: minmax(0, 1fr) !important; gap: 4px !important; }
   .this-week { grid-template-columns: minmax(0, 1fr) !important; }
+  .power-key { gap: 6px !important; }
+  .power-key > div { padding: 7px 8px !important; }
+  .power-blurb { display: none; }
   .this-week-games { grid-template-columns: minmax(0, 1fr) !important; }
   .site-nav { display: none !important; }
   .rail-strip { margin-bottom: 8px; }
@@ -1349,6 +1352,11 @@ function computeStandingsThroughWeek(weekMatchups, throughWeek, rosters, users) 
 //   25% actual win %
 //   25% recent form: last 3 weeks' average score vs the league's best
 // Regular-season weeks only, through `throughWeek`.
+const POWER_PARTS = [
+  { key: "allPlay", label: "All-play", weight: 50, color: "#0E4D33", blurb: "Share of the league you'd beat each week if everyone played everyone. Pure strength, no schedule luck." },
+  { key: "record", label: "Record", weight: 25, color: "#DAAA00", blurb: "Actual win percentage. Wins still count." },
+  { key: "form", label: "Recent form", weight: 25, color: "#FF6B00", blurb: "Average score over the last 3 weeks, compared to the league's hottest team." },
+];
 const POWER_FORMULA_TEXT = "50% all-play record (how many teams you'd beat each week if everyone played everyone), 25% actual record, 25% last-3-weeks scoring.";
 function computePowerRankings(standings, weekMatchups, throughWeek, playoffStart = 15) {
   if (standings.length === 0) return [];
@@ -4462,7 +4470,17 @@ function PowerTab({ power, data }) {
       <SectionLabel>Power Rankings</SectionLabel>
       <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
         Not the standings. Your record can lie, this can't. This is who's actually playing good football right now.
-        <div style={{ marginTop: 4, fontSize: 11 }}>How it's scored: {POWER_FORMULA_TEXT}</div>
+        <div className="power-key" style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8, marginTop: 10, marginBottom: 4 }}>
+          {POWER_PARTS.map((part) => (
+            <div key={part.key} style={{ background: COLORS.surface, border: `1px solid ${COLORS.hairline}`, borderTop: `3px solid ${part.color}`, borderRadius: 8, padding: "8px 10px" }}>
+              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 6 }}>
+                <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, fontWeight: 700, color: COLORS.bone, textTransform: "uppercase", letterSpacing: "0.06em" }}>{part.label}</span>
+                <span style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 15, color: part.color === "#DAAA00" ? COLORS.gold : part.color }}>{part.weight}%</span>
+              </div>
+              <div className="power-blurb" style={{ fontSize: 11, color: COLORS.muted, marginTop: 3, lineHeight: 1.35 }}>{part.blurb}</div>
+            </div>
+          ))}
+        </div>
       </div>
       <Card style={{ padding: "7px 12px" }}>
         {power.map((p, i) => {
@@ -4517,19 +4535,22 @@ function PowerTab({ power, data }) {
                   </span>
                 )}
               </div>
-              <div style={{ position: "relative", height: 6, background: COLORS.surfaceLight, borderRadius: 3, marginTop: 6 }}>
-                <div
-                  style={{
-                    position: "absolute",
-                    left: 0,
-                    top: 0,
-                    bottom: 0,
-                    width: `${(p.power / maxPower) * 100}%`,
-                    background: barColor,
-                    borderRadius: 3,
-                  }}
-                />
-              </div>
+              {(() => {
+                const allPlayPts = (p.allPlayPct ?? 0) * 50;
+                const recordPts = (p.winPct ?? 0) * 25;
+                const formPts = Math.max(0, p.power - allPlayPts - recordPts);
+                const segs = [[allPlayPts, POWER_PARTS[0].color, "All-play"], [recordPts, POWER_PARTS[1].color, "Record"], [formPts, POWER_PARTS[2].color, "Recent form"]];
+                return (
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 7 }}>
+                    <div style={{ flex: 1, display: "flex", height: 9, background: COLORS.surfaceLight, borderRadius: 5, overflow: "hidden" }}>
+                      {segs.map(([pts, color, label]) => (
+                        <div key={label} title={`${label}: ${fmt(pts)} of ${label === "All-play" ? 50 : 25}`} style={{ width: `${pts}%`, background: color }} />
+                      ))}
+                    </div>
+                    <span style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 15, color: COLORS.turf, minWidth: 40, textAlign: "right" }}>{fmt(p.power)}</span>
+                  </div>
+                );
+              })()}
               <div
                 style={{
                   display: "flex",
@@ -4542,7 +4563,15 @@ function PowerTab({ power, data }) {
                   color: COLORS.muted,
                 }}
               >
-                <span>{fmt(p.wins, 0)}-{fmt(p.losses, 0)} · {fmt(p.fpts)} PF</span>
+                {p.allPlayPct !== undefined ? (
+                  <>
+                    <span><span style={{ color: POWER_PARTS[0].color }}>●</span> All-play {Math.round(p.allPlayPct * 100)}%</span>
+                    <span><span style={{ color: POWER_PARTS[1].color }}>●</span> {fmt(p.wins, 0)}-{fmt(p.losses, 0)}{p.ties ? `-${p.ties}` : ""}</span>
+                    <span><span style={{ color: POWER_PARTS[2].color }}>●</span> Last 3: {fmt(p.recentAvg)} avg</span>
+                  </>
+                ) : (
+                  <span>{fmt(p.wins, 0)}-{fmt(p.losses, 0)} · {fmt(p.fpts)} PF</span>
+                )}
                 {delta !== undefined && (
                   <span
                     style={{
@@ -4560,6 +4589,7 @@ function PowerTab({ power, data }) {
         })}
       </Card>
       <div style={{ marginTop: 10, fontSize: 12, color: COLORS.muted }}>
+        Score is out of 100: all-play is worth up to 50, record and recent form up to 25 each. Hover a bar segment for its exact points.
         Movement (▲▼) compares to where each team stood before last week's games, using the same formula.
         Steady/Boom-Bust compares how much a team's weekly score swings around its own average, relative to the rest
         of the league (needs 3+ completed weeks to show up).
