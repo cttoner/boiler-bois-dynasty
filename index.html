@@ -4,7 +4,13 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Boiler Dynasty</title>
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%231C1C1C'/%3E%3Cellipse cx='50' cy='50' rx='32' ry='20' fill='%23B58A00'/%3E%3Cpath d='M27 50h46M40 42v16M50 40v20M60 42v16' stroke='white' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E" />
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png" />
+<link rel="apple-touch-icon" href="apple-touch-icon.png" />
+<link rel="manifest" href="manifest.webmanifest" />
+<meta name="theme-color" content="#0E4D33" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-title" content="Boiler Dynasty" />
 <style>
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; background: #FAF9F6; overflow-x: hidden; width: 100%; }
@@ -29,26 +35,67 @@ const API = "https://api.sleeper.app/v1";
 const PLAYERS_CACHE_KEY = "boilerbois_players_cache_v1";
 const PLAYERS_CACHE_MAX_AGE_MS = 12 * 60 * 60 * 1000; // 12 hours
 
-function loadCachedPlayers() {
+// Browser cache in IndexedDB (much more room than localStorage, which
+// was too small for Sleeper's player list). Everything here is optional:
+// if the browser blocks storage, the site just fetches like normal.
+const IDB_NAME = "boilerdynasty";
+const IDB_STORE = "cache";
+const CACHE_VERSION = 2; // bump if the shape of cached data ever changes
+function idbOpen() {
+  return new Promise((resolve, reject) => {
+    if (!window.indexedDB) return reject(new Error("no indexedDB"));
+    const req = indexedDB.open(IDB_NAME, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore(IDB_STORE);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+async function idbGet(key) {
   try {
-    const raw = localStorage.getItem(PLAYERS_CACHE_KEY);
-    if (!raw) return null;
-    const cached = JSON.parse(raw);
-    if (!cached.fetchedAt || Date.now() - cached.fetchedAt > PLAYERS_CACHE_MAX_AGE_MS) return null;
-    return cached.players || null;
+    const db = await idbOpen();
+    return await new Promise((resolve) => {
+      const q = db.transaction(IDB_STORE, "readonly").objectStore(IDB_STORE).get(key);
+      q.onsuccess = () => resolve(q.result);
+      q.onerror = () => resolve(undefined);
+    });
   } catch (e) {
-    return null;
+    return undefined;
+  }
+}
+async function idbSet(key, value) {
+  try {
+    const db = await idbOpen();
+    await new Promise((resolve) => {
+      const tx = db.transaction(IDB_STORE, "readwrite");
+      tx.objectStore(IDB_STORE).put(value, key);
+      tx.oncomplete = resolve; tx.onerror = resolve; tx.onabort = resolve;
+    });
+  } catch (e) {
+    // caching is a nice-to-have
   }
 }
 
-function saveCachedPlayers(players) {
-  try {
-    localStorage.setItem(PLAYERS_CACHE_KEY, JSON.stringify({ fetchedAt: Date.now(), players }));
-  } catch (e) {
-    // Storage full, unavailable, or blocked (private browsing, etc.) -
-    // caching is a nice-to-have, so just skip it rather than fail the load.
-  }
+// Only the player fields the site actually uses, so the cache stays small.
+function slimPlayers(raw) {
+  const out = {};
+  Object.entries(raw || {}).forEach(([id, p]) => {
+    if (!p) return;
+    out[id] = {
+      first_name: p.first_name, last_name: p.last_name, position: p.position, team: p.team,
+      injury_status: p.injury_status, birth_date: p.birth_date, age: p.age, college: p.college,
+    };
+  });
+  return out;
 }
+async function loadCachedPlayers() {
+  const cached = await idbGet(`players_v${CACHE_VERSION}`);
+  if (!cached || !cached.fetchedAt || Date.now() - cached.fetchedAt > PLAYERS_CACHE_MAX_AGE_MS) return null;
+  return cached.players || null;
+}
+function saveCachedPlayers(players) {
+  idbSet(`players_v${CACHE_VERSION}`, { fetchedAt: Date.now(), players });
+}
+try { localStorage.removeItem(PLAYERS_CACHE_KEY); } catch (e) {}
 
 const fontImport = `
 @import url('https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
@@ -127,6 +174,7 @@ textarea:hover, textarea:focus { border-color: #0E4D33; outline: none; }
   .train-run { left: calc(100% - 100px); }
   @keyframes trainRoll { from { left: -120px; } to { left: calc(100% - 100px); } }
   .roster-cols { grid-template-columns: minmax(0, 1fr) !important; }
+  .draft-player { flex: 1 1 100% !important; }
 }
 `;
 
@@ -405,6 +453,7 @@ function useLeagueData(leagueId) {
 
       return {
         champion, runnerUp, third, lastPlace, standings, playoffWins, playoffLosses, highGame, h2h, bestPlayerGame,
+        bracket: Array.isArray(bracket) ? bracket : [],
         ownerWeeklyHigh, ownerBestPlayerGame, ownerPlayerTotals, weekMatchups: seasonWeekMatchups,
       };
     }
@@ -494,7 +543,11 @@ function useLeagueData(leagueId) {
         guard++;
         try {
           const seasonLeague = await j(`${API}/league/${cursor}`);
-          chain.push({ leagueId: cursor, season: seasonLeague.season, playoffWeekStart: seasonLeague.settings?.playoff_week_start });
+          chain.push({
+            leagueId: cursor, season: seasonLeague.season, status: seasonLeague.status,
+            playoffWeekStart: seasonLeague.settings?.playoff_week_start,
+            divisions: seasonLeague.settings?.divisions || 0,
+          });
           cursor = seasonLeague.previous_league_id;
         } catch (e) {
           cursor = null;
@@ -508,7 +561,14 @@ function useLeagueData(leagueId) {
       // no longer wipes out every older season behind it either, since
       // each season now succeeds or fails independently.
       const results = await Promise.all(
-        chain.map(async ({ leagueId, season, playoffWeekStart }) => {
+        chain.map(async ({ leagueId, season, playoffWeekStart, status, divisions }) => {
+          // A finished season never changes, so it's saved in the browser
+          // after the first visit and read from there from then on.
+          const cacheKey = `season_v${CACHE_VERSION}_${leagueId}`;
+          if (status === "complete") {
+            const cached = await idbGet(cacheKey);
+            if (cached && cached.season) return cached;
+          }
           try {
             const [seasonUsers, seasonRosters] = await Promise.all([
               j(`${API}/league/${leagueId}/users`),
@@ -519,10 +579,11 @@ function useLeagueData(leagueId) {
               fetchSeasonTrades(leagueId, season, seasonRosters, seasonUsers),
               fetchSeasonDraft(leagueId, seasonRosters, seasonUsers),
             ]);
-            return {
+            const built = {
               season,
               leagueId,
               playoffWeekStart,
+              divisions,
               users: seasonUsers,
               rosters: seasonRosters,
               trades: seasonTransactions.trades,
@@ -530,6 +591,8 @@ function useLeagueData(leagueId) {
               draftPicks,
               ...awards,
             };
+            if (status === "complete") idbSet(cacheKey, built);
+            return built;
           } catch (e) {
             return null;
           }
@@ -553,12 +616,13 @@ function useLeagueData(leagueId) {
         const isActiveSeason = seasonType === "regular" || seasonType === "post";
         const week = isActiveSeason ? Math.max(1, nflState.week || 1) : 1;
 
-        const cachedPlayers = loadCachedPlayers();
-        const [users, rosters, playersRaw] = await Promise.all([
+        const cachedPlayers = await loadCachedPlayers();
+        const [users, rosters, playersFetched] = await Promise.all([
           j(`${API}/league/${leagueId}/users`),
           j(`${API}/league/${leagueId}/rosters`),
-          cachedPlayers ? Promise.resolve(cachedPlayers) : j(`${API}/players/nfl`).catch(() => ({})),
+          cachedPlayers ? Promise.resolve(cachedPlayers) : j(`${API}/players/nfl`).then(slimPlayers).catch(() => ({})),
         ]);
+        const playersRaw = playersFetched;
         if (!cachedPlayers && playersRaw && Object.keys(playersRaw).length > 0) {
           saveCachedPlayers(playersRaw);
         }
@@ -1426,13 +1490,20 @@ function App() {
           />
         )}
         {tab === "matchups" && (
-          <MatchupsTab
-            matchups={data.matchups}
-            rostersById={rostersById}
-            usersById={usersById}
-            week={data.week}
-            seasonType={data.seasonType}
-          />
+          <>
+            {(data.week >= (data.league?.settings?.playoff_week_start || 15) || data.seasonType === "post") && (
+              <div style={{ marginBottom: 22 }}>
+                <PlayoffBracket data={data} standings={standings} usersById={usersById} />
+              </div>
+            )}
+            <MatchupsTab
+              matchups={data.matchups}
+              rostersById={rostersById}
+              usersById={usersById}
+              week={data.week}
+              seasonType={data.seasonType}
+            />
+          </>
         )}
         {tab === "recap" && (
           <RecapTab data={data} rostersById={rostersById} usersById={usersById} />
@@ -1485,6 +1556,7 @@ function App() {
             seasonHistory={data.seasonHistory}
             superlatives={leagueSuper}
             players={data.players}
+            data={data}
           />
         )}
       </div>
@@ -1926,6 +1998,9 @@ function StandingsTab({ standings, playoffTeams, data, usersById }) {
             </div>
           ) : null}
           <PlayoffOdds data={data} />
+          {data.week < (data.league?.settings?.playoff_week_start || 15) && (
+            <PlayoffBracket data={data} standings={standings} usersById={usersById} />
+          )}
         </div>
       ) : (
         <div>
@@ -2441,6 +2516,330 @@ function PlayoffOdds({ data }) {
         "Lock" and "Out" mean it happened in every simulation, not that it's mathematically official. Projected wins
         include current wins. Odds refresh every time the page loads, so they'll move a point or two run to run.
       </div>
+    </div>
+  );
+}
+
+
+// ---- Playoff bracket ----
+// Drawn straight from Sleeper's winners bracket. Before the playoffs,
+// Sleeper keeps it filled in from the current standings, so it doubles as
+// "if the season ended today". Scores come from each playoff week.
+function computeSeeds(standings, rosters, divisionCount) {
+  const divOf = Object.fromEntries((rosters || []).map((r) => [r.roster_id, r.settings?.division ?? null]));
+  let seeded = standings.map((s) => s.rosterId);
+  if (divisionCount) {
+    const seen = new Set();
+    const leaders = [];
+    standings.forEach((s) => {
+      const d = divOf[s.rosterId];
+      if (d != null && !seen.has(d)) { seen.add(d); leaders.push(s.rosterId); }
+    });
+    seeded = [...leaders, ...seeded.filter((id) => !leaders.includes(id))];
+  }
+  return Object.fromEntries(seeded.map((id, i) => [id, i + 1]));
+}
+
+function PlayoffBracket({ data, standings, usersById, archive }) {
+  // `archive` draws a past season instead of the current one
+  const league = data.league;
+  const rosters = archive ? archive.rosters : data.rosters;
+  const week = archive ? 99 : data.week;
+  const weekMatchups = archive ? archive.weekMatchups : data.weekMatchups;
+  const matchups = archive ? [] : data.matchups;
+  const bracket = (archive ? archive.bracket : data.currentBracket) || [];
+  const playoffStart = archive ? archive.playoffWeekStart || 15 : league?.settings?.playoff_week_start || 15;
+  const divs = archive ? archive.divisions : league?.settings?.divisions;
+  const divisionCount = divs > 1 ? divs : 0;
+  if (archive) {
+    usersById = Object.fromEntries((archive.users || []).map((u) => [u.user_id, u]));
+    standings = archive.standings || [];
+  }
+  const seasonLabel = archive ? archive.season : league?.season;
+  const seedOf = useMemo(() => computeSeeds(standings, rosters, divisionCount), [standings, rosters, divisionCount]);
+  if (!bracket.length) return null;
+
+  const byM = Object.fromEntries(bracket.map((m) => [m.m, m]));
+  const rounds = [...new Set(bracket.map((m) => m.r))].sort((a, b) => a - b);
+  const lastRound = rounds[rounds.length - 1];
+  const final = bracket.find((m) => m.p === 1) || bracket.find((m) => m.r === lastRound);
+  const started = week >= playoffStart;
+  const champion = final?.w;
+
+  const ownerOf = (rid) => usersById[(rosters || []).find((r) => r.roster_id === rid)?.owner_id];
+  const scoresFor = (r) => {
+    const wk = playoffStart + r - 1;
+    const list = wk === week ? matchups : (weekMatchups || {})[wk];
+    if (!list || wk > week) return null;
+    return Object.fromEntries((list || []).map((m) => [m.roster_id, m.points ?? 0]));
+  };
+  const roundName = (r) =>
+    r === lastRound ? "Championship" : r === lastRound - 1 ? "Semifinals" : `Round ${r}`;
+
+  // Order each column by walking back from the final so the tree lines up.
+  const columns = {};
+  const walk = (m) => {
+    if (!m) return;
+    (columns[m.r] = columns[m.r] || []).push({ match: m });
+    [["t1", m.t1_from], ["t2", m.t2_from]].forEach(([side, from]) => {
+      if (m.r <= rounds[0]) return;
+      if (from && from.w != null) walk(byM[from.w]);
+      else if (m[side] != null) (columns[m.r - 1] = columns[m.r - 1] || []).push({ bye: m[side] });
+    });
+  };
+  walk(final);
+
+  const fromLabel = (from) => {
+    const src = byM[from.w ?? from.l];
+    if (!src) return "TBD";
+    const verb = from.w != null ? "Winner" : "Loser";
+    const seeds = [src.t1, src.t2].filter((x) => x != null).map((x) => seedOf[x]).filter(Boolean).sort((a, b) => a - b);
+    if (seeds.length === 2) return `${verb} of #${seeds[0]} vs #${seeds[1]}`;
+    const game = src.r === lastRound - 1 ? "semifinal" : `round ${src.r} game`;
+    return seeds.length === 1 ? `${verb} of #${seeds[0]}'s ${game}` : `${verb} of ${game}`;
+  };
+
+  const TeamLine = ({ rid, from, score, isWinner, decided }) => {
+    const u = rid != null ? ownerOf(rid) : null;
+    const dim = decided && !isWinner;
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", opacity: dim ? 0.5 : 1, background: isWinner ? "rgba(218,170,0,0.14)" : "transparent", borderRadius: 4 }}>
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: COLORS.muted, width: 18, textAlign: "right" }}>
+          {rid != null && seedOf[rid] ? `#${seedOf[rid]}` : ""}
+        </span>
+        {u ? <Crest name={teamName(u)} logo={avatarUrl(u)} size={20} /> : <div style={{ width: 20, height: 20, borderRadius: 4, border: `1px dashed ${COLORS.hairline}` }} />}
+        <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: isWinner ? 700 : 600, color: u ? COLORS.bone : COLORS.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontStyle: u ? "normal" : "italic" }}>
+          {u ? teamName(u) : from ? fromLabel(from) : "TBD"}
+        </span>
+        {score != null && (
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, fontWeight: isWinner ? 700 : 400, color: isWinner ? COLORS.gold : COLORS.muted }}>
+            {fmt(score)}
+          </span>
+        )}
+      </div>
+    );
+  };
+
+  const MatchCard = ({ m, compact }) => {
+    const sc = scoresFor(m.r);
+    const decided = m.w != null;
+    const isFinal = m === final;
+    // Better seed on top whenever both teams are known
+    let sides = [["t1", m.t1, m.t1_from], ["t2", m.t2, m.t2_from]];
+    if (m.t1 != null && m.t2 != null && (seedOf[m.t2] || 99) < (seedOf[m.t1] || 99)) sides = [sides[1], sides[0]];
+    const line = ([, rid, from]) => (
+      <TeamLine rid={rid} from={from} score={sc && rid != null ? sc[rid] : null} isWinner={decided && m.w === rid} decided={decided} />
+    );
+    return (
+      <div style={{ width: compact ? 230 : 250, background: COLORS.surface, border: `1px solid ${isFinal ? "#DAAA00" : COLORS.hairline}`, borderLeft: `3px solid ${isFinal ? "#DAAA00" : COLORS.turf}`, borderRadius: 8, padding: 3, boxShadow: isFinal ? "0 0 0 3px rgba(218,170,0,0.15)" : "none" }}>
+        {line(sides[0])}
+        <div style={{ height: 1, background: COLORS.hairline, margin: "0 6px" }} />
+        {line(sides[1])}
+      </div>
+    );
+  };
+
+  const ByeCard = ({ rid }) => {
+    const u = ownerOf(rid);
+    return (
+      <div style={{ width: 250, border: `1px dashed ${COLORS.hairline}`, borderRadius: 8, padding: "8px 10px", display: "flex", alignItems: "center", gap: 8, background: "rgba(255,255,255,0.6)" }}>
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: COLORS.muted }}>#{seedOf[rid]}</span>
+        {u && <Crest name={teamName(u)} logo={avatarUrl(u)} size={20} />}
+        <span style={{ flex: 1, fontSize: 12.5, fontWeight: 600, color: COLORS.bone, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{u ? teamName(u) : "?"}</span>
+        <span style={{ fontSize: 10, fontWeight: 700, color: "#FFFFFF", background: COLORS.pylon, borderRadius: 999, padding: "1px 6px" }}>BYE</span>
+      </div>
+    );
+  };
+
+  const placement = bracket.filter((m) => m.p && m.p !== 1).sort((a, b) => a.p - b.p);
+  const champUser = champion != null ? ownerOf(champion) : null;
+
+  return (
+    <div style={{ marginTop: 22 }}>
+      <SectionLabel>{archive ? `${seasonLabel} playoff bracket` : "Playoff bracket"}</SectionLabel>
+      <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
+        {archive
+          ? "How it played out, with every playoff score. Team names are what each manager called their team that year."
+          : started
+          ? "Straight from Sleeper. Scores update as the playoff weeks play out."
+          : "If the season ended today. Sleeper keeps this filled in from the current standings until Week " + playoffStart + " locks it in."}
+      </div>
+      {champUser && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, background: "#0E4D33", border: "2px solid #DAAA00", borderRadius: 10, padding: "10px 14px", marginBottom: 12, color: "#FFFFFF" }}>
+          <span style={{ fontSize: 20 }}>🏆</span>
+          <Crest name={teamName(champUser)} logo={avatarUrl(champUser)} size={28} />
+          <div>
+            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, letterSpacing: "0.16em", color: "#CFB991" }}>{seasonLabel} CHAMPION</div>
+            <div style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 16 }}>{withOwner(champUser)}</div>
+          </div>
+        </div>
+      )}
+      <Card style={{ padding: 12, overflowX: "auto" }}>
+        <div style={{ display: "flex", gap: 18, minWidth: "max-content" }}>
+          {rounds.map((r) => (
+            <div key={r} style={{ display: "flex", flexDirection: "column" }}>
+              <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10.5, letterSpacing: "0.08em", textTransform: "uppercase", color: r === lastRound ? COLORS.gold : COLORS.turf, fontWeight: 700, marginBottom: 8 }}>
+                {roundName(r)} <span style={{ color: COLORS.muted, fontWeight: 400 }}>· Wk {playoffStart + r - 1}</span>
+              </div>
+              <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "space-around", gap: 10, minHeight: 300 }}>
+                {(columns[r] || []).map((it, i) =>
+                  it.bye != null ? <ByeCard key={`b${i}`} rid={it.bye} /> : <MatchCard key={it.match.m} m={it.match} />
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </Card>
+      {placement.length > 0 && (
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 10 }}>
+          {placement.map((m) => (
+            <div key={m.m}>
+              <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10.5, letterSpacing: "0.08em", textTransform: "uppercase", color: COLORS.muted, marginBottom: 6 }}>
+                {ordinal(m.p)} place · Wk {playoffStart + m.r - 1}
+              </div>
+              <MatchCard m={m} compact />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ---- Season drafts (History) ----
+// Every draft Sleeper has for a season (startup/veteran and rookie drafts
+// are separate), loaded when that season is opened in History. Finished
+// drafts are saved in the browser. Each pick shows where the player is now.
+const DRAFT_TYPE_LABELS = { 1: "Rookie draft", 2: "Veteran draft" };
+
+function SeasonDrafts({ season, leagueId, seasonUsers, seasonRosters, data }) {
+  const [drafts, setDrafts] = useState(null);
+  const [active, setActive] = useState(0);
+  const [round, setRound] = useState(1);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const list = await fetch(`${API}/league/${leagueId}/drafts`).then((r) => (r.ok ? r.json() : []));
+        const loaded = await Promise.all(
+          (list || []).map(async (d) => {
+            const key = `draft_v1_${d.draft_id}`;
+            if (d.status === "complete") {
+              const cached = await idbGet(key);
+              if (cached) return cached;
+            }
+            const [detail, picks] = await Promise.all([
+              fetch(`${API}/draft/${d.draft_id}`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+              fetch(`${API}/draft/${d.draft_id}/picks`).then((r) => (r.ok ? r.json() : [])).catch(() => []),
+            ]);
+            const built = {
+              id: d.draft_id,
+              type: detail?.settings?.player_type,
+              rounds: detail?.settings?.rounds || d.settings?.rounds,
+              teams: detail?.settings?.teams || 12,
+              start: detail?.start_time || d.start_time || null,
+              slotToRoster: detail?.slot_to_roster_id || {},
+              picks: (picks || []).map((p) => ({ round: p.round, pickNo: p.pick_no, playerId: p.player_id, rosterId: p.roster_id, slot: p.draft_slot })),
+            };
+            if (d.status === "complete" && built.picks.length) idbSet(key, built);
+            return built;
+          })
+        );
+        if (cancelled) return;
+        const withPicks = loaded.filter((d) => d && d.picks.length).sort((a, b) => (a.start || 0) - (b.start || 0));
+        setDrafts(withPicks);
+        // open on the rookie draft when there is one
+        const rookieIdx = withPicks.findIndex((d) => d.type === 1);
+        setActive(rookieIdx >= 0 ? rookieIdx : 0);
+        setRound(1);
+      } catch (e) {
+        if (!cancelled) setDrafts([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [leagueId]);
+
+  if (!drafts || drafts.length === 0) return null;
+  const draft = drafts[Math.min(active, drafts.length - 1)];
+  const players = data.players || {};
+  const seasonUserById = Object.fromEntries((seasonUsers || []).map((u) => [u.user_id, u]));
+  const seasonOwnerOfRoster = (rid) => seasonUserById[(seasonRosters || []).find((r) => r.roster_id === rid)?.owner_id];
+  // where each player is today
+  const currentHolder = {};
+  (data.rosters || []).forEach((r) => (r.players || []).forEach((pid) => { currentHolder[pid] = r.owner_id; }));
+  const currentUserById = Object.fromEntries((data.users || []).map((u) => [u.user_id, u]));
+
+  const roundPicks = draft.picks.filter((p) => p.round === round).sort((a, b) => a.pickNo - b.pickNo);
+  const label = (d) => DRAFT_TYPE_LABELS[d.type] || "Draft";
+  const dateLabel = (d) => (d.start ? new Date(d.start).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : null);
+  const chip = (activeNow) => ({
+    fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, padding: "5px 10px", borderRadius: 6, cursor: "pointer",
+    border: `1px solid ${activeNow ? COLORS.turf : COLORS.hairline}`,
+    background: activeNow ? COLORS.turfTint : "transparent",
+    color: activeNow ? COLORS.turf : COLORS.muted, fontWeight: activeNow ? 600 : 400,
+  });
+
+  return (
+    <div style={{ marginTop: 22 }}>
+      <SectionLabel>{season} drafts</SectionLabel>
+      <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
+        Every pick, who made it, and where that player is now. Draft classes only get more fun to look back on.
+      </div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+        {drafts.map((d, i) => (
+          <button key={d.id} onClick={() => { setActive(i); setRound(1); }} style={chip(i === active)}>
+            {label(d)}{dateLabel(d) ? ` · ${dateLabel(d)}` : ""}
+          </button>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 10 }}>
+        {Array.from({ length: draft.rounds || Math.max(...draft.picks.map((p) => p.round)) }, (_, i) => i + 1).map((r) => (
+          <button key={r} onClick={() => setRound(r)} style={{ ...chip(r === round), padding: "4px 9px" }}>Rd {r}</button>
+        ))}
+      </div>
+      <Card style={{ padding: 0, overflow: "hidden" }}>
+        {roundPicks.map((p, i) => {
+          const pl = players[p.playerId];
+          const name = pl ? `${pl.first_name || ""} ${pl.last_name || ""}`.trim() : p.playerId;
+          const pc = positionColor(pl?.position);
+          const drafter = seasonOwnerOfRoster(p.rosterId);
+          const originalRid = draft.slotToRoster[p.slot];
+          const via = originalRid != null && originalRid !== p.rosterId ? seasonOwnerOfRoster(originalRid) : null;
+          const nowOwnerId = currentHolder[p.playerId];
+          const drafterOwnerId = drafter?.user_id;
+          const nowUser = nowOwnerId ? currentUserById[nowOwnerId] : null;
+          const pickInRound = ((p.pickNo - 1) % (draft.teams || 12)) + 1;
+          let status;
+          if (!nowOwnerId) status = { text: "Not on a roster", color: COLORS.muted };
+          else if (nowOwnerId === drafterOwnerId) status = { text: "Still on the team", color: COLORS.turf };
+          else status = { text: `Now: ${nowUser ? teamName(nowUser) : "another team"}`, color: COLORS.goldDim };
+          return (
+            <div key={p.pickNo} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", borderTop: i ? `1px solid ${COLORS.hairline}` : "none", flexWrap: "wrap" }}>
+              <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, fontWeight: 600, color: COLORS.turf, width: 38 }}>
+                {p.round}.{String(pickInRound).padStart(2, "0")}
+              </span>
+              <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, fontWeight: 600, padding: "2px 6px", borderRadius: 4, background: pc.bg, color: pc.fg, minWidth: 26, textAlign: "center" }}>
+                {pl?.position || "?"}
+              </span>
+              <span className="draft-player" style={{ fontWeight: 600, fontSize: 13.5, color: COLORS.bone, minWidth: 0, flex: "0 1 300px" }}>
+                {name}
+                {isBoilermaker(pl) && <span style={{ marginLeft: 6 }}><BoilerTag /></span>}
+                <span style={{ fontSize: 11, color: COLORS.muted, fontWeight: 400, marginLeft: 6 }}>{pl?.team || ""}</span>
+              </span>
+              <span style={{ display: "flex", alignItems: "center", gap: 6, flex: "1 1 200px", minWidth: 0 }}>
+                {drafter && <Crest name={teamName(drafter)} logo={avatarUrl(drafter)} size={18} />}
+                <span style={{ fontSize: 12.5, color: COLORS.bone, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {drafter ? teamName(drafter) : "?"}
+                  {via && <span style={{ color: COLORS.muted }}> (via {teamName(via)})</span>}
+                </span>
+              </span>
+              <span style={{ fontSize: 11.5, color: status.color, fontWeight: 600, whiteSpace: "nowrap", marginLeft: "auto" }}>{status.text}</span>
+            </div>
+          );
+        })}
+      </Card>
     </div>
   );
 }
@@ -5506,6 +5905,7 @@ function buildSeasonHistoryData(summary, players, ownerDirectory) {
   const teamRows = summary.standings.map((s, i) => ({
     rank: i + 1,
     ownerId: s.ownerId,
+    rosterId: s.rosterId,
     displayName: s.displayName,
     name: s.name,
     avatar: s.avatar,
@@ -5669,7 +6069,7 @@ function buildSeasonRecapNarrative(summary, players, ownerDirectory) {
   return paragraphs;
 }
 
-function HistoryTab({ rostersById, usersById, standings, seasonHistory, superlatives, players, currentSeason }) {
+function HistoryTab({ rostersById, usersById, standings, seasonHistory, superlatives, players, currentSeason, data }) {
   // One summary per season, current one included.
   const seasonSummaries = useMemo(() => {
     const historical = (seasonHistory || []).map((s) => ({
@@ -5691,13 +6091,14 @@ function HistoryTab({ rostersById, usersById, standings, seasonHistory, superlat
     const currentHighGame = currentTopWeek
       ? { owner: usersById[rostersById[currentTopWeek.rosterId]?.owner_id], points: currentTopWeek.points, week: currentTopWeek.week }
       : null;
+    const done = superlatives?.currentResult; // set once this season's final is played
     const current = {
       season: currentSeason,
-      isComplete: false,
-      champion: null,
-      runnerUp: null,
-      third: null,
-      lastPlace: null,
+      isComplete: !!done,
+      champion: done?.champion || null,
+      runnerUp: done?.runnerUp || null,
+      third: done?.third || null,
+      lastPlace: done?.lastPlace || null,
       standings: standings || [],
       highGame: currentHighGame,
       bestPlayerGame: superlatives?.currentSeasonSuper?.bestPlayerGame || null,
@@ -5718,6 +6119,23 @@ function HistoryTab({ rostersById, usersById, standings, seasonHistory, superlat
   const selectedSummary = seasonSummaries[selectedSeasonIdx];
   const historyData = selectedSummary ? buildSeasonHistoryData(selectedSummary, players, ownerDirectory) : null;
   const seasonNarrative = selectedSummary ? buildSeasonRecapNarrative(selectedSummary, players, ownerDirectory) : [];
+
+  // Playoff seeds for the selected season, using the same rules as Standings.
+  // Only teams that actually appear in that year's bracket get a seed.
+  const selectedPast = selectedSummary ? (seasonHistory || []).find((s) => String(s.season) === String(selectedSummary.season)) : null;
+  const seedInfo = useMemo(() => {
+    if (!selectedSummary) return null;
+    const bracket = selectedPast ? selectedPast.bracket : data?.currentBracket;
+    if (!bracket || !bracket.length) return null;
+    const rosters = selectedPast ? selectedPast.rosters : data?.rosters;
+    const divs = selectedPast ? selectedPast.divisions : data?.league?.settings?.divisions;
+    const seeds = computeSeeds(selectedSummary.standings || [], rosters, divs > 1 ? divs : 0);
+    const minRound = Math.min(...bracket.map((m) => m.r));
+    const inBracket = new Set(bracket.flatMap((m) => [m.t1, m.t2]).filter((x) => x != null));
+    const roundOne = new Set(bracket.filter((m) => m.r === minRound).flatMap((m) => [m.t1, m.t2]));
+    const byes = new Set([...inBracket].filter((x) => !roundOne.has(x)));
+    return { seeds, inBracket, byes };
+  }, [selectedSummary, selectedPast, data]);
 
   if (seasonSummaries.every((s) => s.standings.length === 0)) {
     return (
@@ -5807,7 +6225,7 @@ function HistoryTab({ rostersById, usersById, standings, seasonHistory, superlat
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
                     <tr style={{ background: COLORS.surfaceLight }}>
-                      {["#", "Team", "W", "L", "T", "PF", "PA", "Diff"].map((h, i) => (
+                      {["#", "Team", ...(seedInfo ? ["Seed"] : []), "W", "L", "T", "PF", "PA", "Diff"].map((h, i) => (
                         <th
                           key={h}
                           style={{
@@ -5837,6 +6255,20 @@ function HistoryTab({ rostersById, usersById, standings, seasonHistory, superlat
                             <span style={{ fontSize: 13, fontWeight: 600 }}>{t.displayName}</span>
                           </div>
                         </td>
+                        {seedInfo && (
+                          <td style={{ padding: "7px 12px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, whiteSpace: "nowrap" }}>
+                            {seedInfo.inBracket.has(t.rosterId) ? (
+                              <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: COLORS.turf, fontWeight: 600 }}>
+                                {seedInfo.byes.has(t.rosterId) && (
+                                  <span style={{ fontSize: 10, fontWeight: 700, color: "#FFFFFF", background: COLORS.pylon, borderRadius: 999, padding: "1px 6px" }}>BYE</span>
+                                )}
+                                <span style={{ minWidth: 14, textAlign: "right" }}>{seedInfo.seeds[t.rosterId]}</span>
+                              </span>
+                            ) : (
+                              <span style={{ color: COLORS.muted }}>-</span>
+                            )}
+                          </td>
+                        )}
                         <td style={{ padding: "7px 12px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace", fontSize: 13 }}>{t.wins}</td>
                         <td style={{ padding: "7px 12px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace", fontSize: 13 }}>{t.losses}</td>
                         <td style={{ padding: "7px 12px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace", fontSize: 13 }}>{t.ties}</td>
@@ -5853,6 +6285,31 @@ function HistoryTab({ rostersById, usersById, standings, seasonHistory, superlat
             </Card>
           </div>
         </div>
+      )}
+
+      {selectedSummary && data && (() => {
+        const past = (seasonHistory || []).find((s) => String(s.season) === String(selectedSummary.season));
+        if (past && past.bracket && past.bracket.length) {
+          return <PlayoffBracket data={data} archive={past} />;
+        }
+        // current season: show it here once the playoffs are underway
+        const isCurrent = String(selectedSummary.season) === String(currentSeason);
+        const pws = data.league?.settings?.playoff_week_start || 15;
+        if (isCurrent && (data.week >= pws || superlatives?.currentResult)) {
+          return <PlayoffBracket data={data} standings={standings} usersById={usersById} />;
+        }
+        return null;
+      })()}
+
+      {selectedSummary && data && (
+        <SeasonDrafts
+          key={selectedSummary.season}
+          season={selectedSummary.season}
+          leagueId={selectedPast ? selectedPast.leagueId : data.league?.league_id || LEAGUE_ID}
+          seasonUsers={selectedPast ? selectedPast.users : data.users}
+          seasonRosters={selectedPast ? selectedPast.rosters : data.rosters}
+          data={data}
+        />
       )}
     </div>
   );
@@ -6149,7 +6606,7 @@ function useLeagueSuperlatives(data, standings, usersById) {
   return {
     championsByOwner, orderedTitles, currentSeasonSuper, ownerForRoster, wallOfShame,
     historyRows, ownerDirectory, allSeasonEntries, allTimeSuperlatives, mostTitles,
-    teamNameIn, gameRecords, mostCareerPoints,
+    teamNameIn, gameRecords, mostCareerPoints, currentResult,
   };
 }
 
