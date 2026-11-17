@@ -174,6 +174,7 @@ textarea:hover, textarea:focus { border-color: #0E4D33; outline: none; }
   .train-run { left: calc(100% - 100px); }
   @keyframes trainRoll { from { left: -120px; } to { left: calc(100% - 100px); } }
   .roster-cols { grid-template-columns: minmax(0, 1fr) !important; }
+  .draft-player { flex: 1 1 100% !important; }
 }
 `;
 
@@ -2822,12 +2823,12 @@ function SeasonDrafts({ season, leagueId, seasonUsers, seasonRosters, data }) {
               <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, fontWeight: 600, padding: "2px 6px", borderRadius: 4, background: pc.bg, color: pc.fg, minWidth: 26, textAlign: "center" }}>
                 {pl?.position || "?"}
               </span>
-              <span style={{ fontWeight: 600, fontSize: 13.5, color: COLORS.bone, minWidth: 140, flex: "1 1 160px" }}>
+              <span className="draft-player" style={{ fontWeight: 600, fontSize: 13.5, color: COLORS.bone, minWidth: 0, flex: "0 1 300px" }}>
                 {name}
                 {isBoilermaker(pl) && <span style={{ marginLeft: 6 }}><BoilerTag /></span>}
                 <span style={{ fontSize: 11, color: COLORS.muted, fontWeight: 400, marginLeft: 6 }}>{pl?.team || ""}</span>
               </span>
-              <span style={{ display: "flex", alignItems: "center", gap: 6, flex: "1 1 180px", minWidth: 0 }}>
+              <span style={{ display: "flex", alignItems: "center", gap: 6, flex: "1 1 200px", minWidth: 0 }}>
                 {drafter && <Crest name={teamName(drafter)} logo={avatarUrl(drafter)} size={18} />}
                 <span style={{ fontSize: 12.5, color: COLORS.bone, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                   {drafter ? teamName(drafter) : "?"}
