@@ -1417,6 +1417,12 @@ function App() {
   const data = useLeagueData(LEAGUE_ID);
   const [tab, setTab] = useState("home");
   const [selectedRosterId, setSelectedRosterId] = useState(null);
+  const [notesOpen, setNotesOpen] = useState(false);
+  useEffect(() => {
+    const open = () => setNotesOpen(true);
+    window.addEventListener("open-patch-notes", open);
+    return () => window.removeEventListener("open-patch-notes", open);
+  }, []);
 
   const usersById = useMemo(
     () => Object.fromEntries(data.users.map((u) => [u.user_id, u])),
@@ -1698,7 +1704,11 @@ function App() {
             return builder ? withOwner(builder) : "C. Toner";
           })()}
         </div>
+        <button onClick={openPatchNotes} style={{ marginTop: 10, background: "none", border: "1px solid rgba(207,185,145,0.5)", color: "#CFB991", borderRadius: 999, padding: "5px 12px", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, cursor: "pointer" }}>
+          Patch notes · v{LATEST_VERSION}
+        </button>
       </div>
+      {notesOpen && <PatchNotesModal onClose={() => setNotesOpen(false)} />}
       <BottomNav tab={tab} setTab={setTab} />
     </div>
   );
@@ -3150,6 +3160,160 @@ function ThisWeek({ data, standings, usersById }) {
           </Card>
         )}
       </div>
+    </div>
+  );
+}
+
+
+// ---- Patch notes ----
+// Newest first. Add a new entry at the top whenever the site changes;
+// bump `version` and the Home "what's new" banner shows again for everyone.
+const PATCH_NOTES = [
+  {
+    version: "2.0",
+    date: "2026-11-17",
+    title: "Boiler Up",
+    blurb: "The biggest update yet: a new look, a phone app feel, a live playoff bracket, and a lot of numbers checked against Sleeper.",
+    sections: [
+      { heading: "New look", items: [
+        "Field green, Purdue gold, and pylon orange across the whole site, with a gold locomotive that rolls across the header",
+        "Champion banners hang from the rafters now, with an \"Up for grabs\" banner waiting for this year's winner",
+        "Add it to your home screen: it opens like an app with its own gold train icon",
+        "BOILER tags on Purdue alums, and a Boiler Up sign-off on every page",
+      ] },
+      { heading: "Built for your phone", items: [
+        "App-style tab bar at the bottom: Home, Standings, Games, Recap, and More",
+        "Tables only show the numbers that matter on a phone, so Standings fits without sliding sideways",
+        "Long reads fold behind \"Read more\" and long lists open with a tap. Most tabs are about half as long",
+      ] },
+      { heading: "Playoffs", items: [
+        "Playoff odds: 10,000 simulated finishes using every team's real schedule and scoring",
+        "Divisions and seeds in Standings: division winners get seeds 1-2 and the byes, ties go to points for",
+        "Live playoff bracket straight from Sleeper, with every past bracket saved in History",
+        "This year's champion goes up on Home the moment the final is played",
+      ] },
+      { heading: "Game day", items: [
+        "Home opens with this week's games and the playoff line, with the cut line marked",
+        "Live scores refresh every minute on game days while the site is open",
+      ] },
+      { heading: "Records & history", items: [
+        "Six new all-time records: biggest blowout, closest game, lowest score, longest win streak, most career points, most points against",
+        "Records remember what your team was called the year you set them",
+        "History adds every season's drafts (with where each pick is now) and playoff seeds",
+      ] },
+      { heading: "Power rankings, rebuilt", items: [
+        "New formula: 50% all-play record, 25% actual record, 25% last-3-weeks scoring",
+        "Every team shows its breakdown, and tied scores share the rank",
+      ] },
+      { heading: "Rules, rebuilt", items: [
+        "Clean sections in a logical order, with the stuff people argue about: seeding, tiebreakers, taxi, IR, trades",
+        "The 1.01 pick comes with a punishment: the hot chip challenge",
+      ] },
+      { heading: "Fixes", items: [
+        "Waivers listed as Tuesday, now correct: Wednesday",
+        "50+ yard field goals were filed under \"Other,\" now in Kicking",
+        "Playoff weeks could create fake matchups from bye teams, now skipped",
+        "Loads about three times faster on repeat visits",
+      ] },
+    ],
+  },
+  {
+    version: "1.5",
+    date: "2026-09-15",
+    title: "The Recap Update",
+    sections: [
+      { heading: "New", items: [
+        "Recap tab: a written recap every week, weekly superlatives, and a shareable recap image",
+        "Waiver wire activity, and Trades became Transactions",
+        "Rivalries: tap any head-to-head matchup for the full history",
+        "Steady and Boom-Bust tags in Power Rankings",
+        "Season recaps, waiver wire MVP, and most active manager in History",
+      ] },
+    ],
+  },
+  {
+    version: "1.0",
+    date: "2026-08-12",
+    title: "Kickoff",
+    sections: [
+      { heading: "Launch", items: [
+        "Boiler Dynasty goes live, pulling straight from Sleeper",
+        "Home with champion banners, league history, all-time superlatives, and the Wall of Shame",
+        "Standings with the Luck Index and a head-to-head heat map",
+        "Matchups, Power Rankings, Rosters (with Trophy Case and Lineup IQ), Trades, Draft Picks, History, and Rules",
+      ] },
+    ],
+  },
+];
+const LATEST_VERSION = PATCH_NOTES[0].version;
+const openPatchNotes = () => window.dispatchEvent(new Event("open-patch-notes"));
+
+function PatchNotesModal({ onClose }) {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { window.removeEventListener("keydown", onKey); document.body.style.overflow = prev; };
+  }, [onClose]);
+  const fmtDate = (d) => new Date(`${d}T12:00:00`).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 80, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "40px 14px", overflowY: "auto" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: 680, background: COLORS.bg, borderRadius: 14, overflow: "hidden", boxShadow: "0 20px 50px rgba(0,0,0,0.35)" }}>
+        <div style={{ background: "#0E4D33", borderTop: "4px solid #DAAA00", padding: "16px 18px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+          <div>
+            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10.5, letterSpacing: "0.14em", color: "#CFB991" }}>BOILER DYNASTY</div>
+            <div style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 22, color: "#FFFFFF" }}>Patch notes 🚂</div>
+          </div>
+          <button onClick={onClose} aria-label="Close" style={{ background: "rgba(255,255,255,0.12)", border: "none", color: "#FFFFFF", width: 34, height: 34, borderRadius: "50%", fontSize: 18, cursor: "pointer" }}>×</button>
+        </div>
+        <div style={{ padding: "6px 18px 20px" }}>
+          {PATCH_NOTES.map((n, idx) => (
+            <div key={n.version} style={{ position: "relative", paddingLeft: 22, paddingTop: 16 }}>
+              <div style={{ position: "absolute", left: 5, top: 22, bottom: idx === PATCH_NOTES.length - 1 ? "auto" : -16, height: idx === PATCH_NOTES.length - 1 ? 0 : "auto", width: 2, background: COLORS.hairline }} />
+              <div style={{ position: "absolute", left: 0, top: 18, width: 12, height: 12, borderRadius: "50%", background: idx === 0 ? "#FF6B00" : "#DAAA00", border: "2px solid #FFFFFF", boxShadow: "0 0 0 1px rgba(0,0,0,0.12)" }} />
+              <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+                <span style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 18, color: COLORS.turf }}>v{n.version}</span>
+                <span style={{ fontWeight: 700, fontSize: 15, color: COLORS.bone }}>{n.title}</span>
+                <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: COLORS.muted }}>{fmtDate(n.date)}</span>
+                {idx === 0 && <span style={{ fontSize: 10, fontWeight: 700, color: "#FFFFFF", background: COLORS.pylon, borderRadius: 999, padding: "1px 7px" }}>LATEST</span>}
+              </div>
+              {n.blurb && <div style={{ fontSize: 13, color: COLORS.muted, marginTop: 4 }}>{n.blurb}</div>}
+              {n.sections.map((sec) => (
+                <div key={sec.heading} style={{ marginTop: 10 }}>
+                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10.5, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: COLORS.goldDim }}>{sec.heading}</div>
+                  <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+                    {sec.items.map((it, i) => (
+                      <li key={i} style={{ fontSize: 13.5, color: COLORS.bone, lineHeight: 1.45, marginTop: 3 }}>{it}</li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// One-time banner on Home after each new version (remembered per browser).
+function WhatsNewBanner() {
+  const KEY = "boilerdynasty_seen_version";
+  const [seen, setSeen] = useState(() => { try { return localStorage.getItem(KEY); } catch (e) { return LATEST_VERSION; } });
+  if (seen === LATEST_VERSION) return null;
+  const dismiss = () => { try { localStorage.setItem(KEY, LATEST_VERSION); } catch (e) {} setSeen(LATEST_VERSION); };
+  const latest = PATCH_NOTES[0];
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, background: "#0E4D33", border: "1px solid #DAAA00", borderRadius: 10, padding: "10px 12px", marginBottom: 16, color: "#FFFFFF" }}>
+      <span style={{ fontSize: 18 }}>🚂</span>
+      <div style={{ flex: 1, minWidth: 0, fontSize: 13 }}>
+        <b style={{ color: "#DAAA00" }}>v{latest.version} {latest.title}</b> is here. New look, live playoff bracket, live scores, and more.
+      </div>
+      <button onClick={() => { openPatchNotes(); dismiss(); }} style={{ background: "#DAAA00", color: "#000000", border: "none", borderRadius: 999, padding: "6px 12px", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
+        See what's new
+      </button>
+      <button onClick={dismiss} aria-label="Dismiss" style={{ background: "none", border: "none", color: "rgba(255,255,255,0.7)", fontSize: 18, cursor: "pointer", padding: "0 2px" }}>×</button>
     </div>
   );
 }
@@ -7179,6 +7343,7 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
 
   return (
     <div>
+      <WhatsNewBanner />
       <ThisWeek data={data} standings={standings} usersById={usersById} />
 
       {/* Champions banner strip: rafter banners */}
