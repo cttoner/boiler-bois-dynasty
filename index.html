@@ -3,16 +3,16 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Dynasty League</title>
+<title>Boiler Dynasty</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%230E4D33'/%3E%3Cellipse cx='50' cy='50' rx='32' ry='20' fill='%23FF6B00'/%3E%3Cpath d='M27 50h46M40 42v16M50 40v20M60 42v16' stroke='white' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E" />
 <style>
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; background: #F4FAF6; overflow-x: hidden; width: 100%; }
   #root { min-height: 100vh; }
 </style>
-<script src="https://unpkg.com/react@18/umd/react.development.js"></script>
-<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.26.4/babel.min.js"></script>
 </head>
 <body>
 <div id="root"></div>
@@ -81,6 +81,24 @@ textarea:hover, textarea:focus { border-color: #0E4D33; outline: none; }
 .banner-pennant:nth-child(3n) {
   animation-duration: 4.4s;
   animation-delay: -2.2s;
+}
+.site-nav { scrollbar-width: none; }
+.site-nav::-webkit-scrollbar { display: none; }
+.mobile-only { display: none !important; }
+.home-super-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 10px; }
+@media (max-width: 640px) {
+  .mobile-only { display: block !important; }
+  .desktop-only { display: none !important; }
+  .site-header { padding: 12px 14px 0 !important; }
+  .site-title { font-size: 22px !important; }
+  .site-nav { flex-wrap: nowrap !important; overflow-x: auto; margin-left: -14px; margin-right: -14px; padding: 0 14px; }
+  .site-nav button { flex-shrink: 0; padding: 9px 12px !important; }
+  .site-main { padding: 12px 14px 24px !important; }
+  .sortable-table th, .sortable-table td { padding: 7px 8px !important; font-size: 13px; }
+  .sortable-table .col-team { position: sticky; left: 0; z-index: 1; background: #FFFFFF; white-space: nowrap; box-shadow: 1px 0 0 rgba(14,77,51,0.14); }
+  .sortable-table thead .col-team { background: #EAF4EE; }
+  .home-super-grid { grid-template-columns: 1fr; }
+  .roster-cols { grid-template-columns: minmax(0, 1fr) !important; }
 }
 `;
 
@@ -398,7 +416,7 @@ function useLeagueData(leagueId) {
         guard++;
         try {
           const seasonLeague = await j(`${API}/league/${cursor}`);
-          chain.push({ leagueId: cursor, season: seasonLeague.season });
+          chain.push({ leagueId: cursor, season: seasonLeague.season, playoffWeekStart: seasonLeague.settings?.playoff_week_start });
           cursor = seasonLeague.previous_league_id;
         } catch (e) {
           cursor = null;
@@ -412,7 +430,7 @@ function useLeagueData(leagueId) {
       // no longer wipes out every older season behind it either, since
       // each season now succeeds or fails independently.
       const results = await Promise.all(
-        chain.map(async ({ leagueId, season }) => {
+        chain.map(async ({ leagueId, season, playoffWeekStart }) => {
           try {
             const [seasonUsers, seasonRosters] = await Promise.all([
               j(`${API}/league/${leagueId}/users`),
@@ -426,6 +444,7 @@ function useLeagueData(leagueId) {
             return {
               season,
               leagueId,
+              playoffWeekStart,
               users: seasonUsers,
               rosters: seasonRosters,
               trades: seasonTransactions.trades,
@@ -735,10 +754,11 @@ function SectionLabel({ children }) {
     <div
       style={{
         fontFamily: "'IBM Plex Mono', monospace",
-        fontSize: 11,
-        letterSpacing: "0.14em",
+        fontSize: 12,
+        fontWeight: 600,
+        letterSpacing: "0.1em",
         textTransform: "uppercase",
-        color: COLORS.turfLight,
+        color: COLORS.turf,
         marginBottom: 6,
       }}
     >
@@ -1208,6 +1228,7 @@ function App() {
 
       {/* Header */}
       <div
+        className="site-header"
         style={{
           borderBottom: `1px solid ${COLORS.hairline}`,
           background: COLORS.bg2,
@@ -1218,6 +1239,7 @@ function App() {
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
           <div>
             <div
+              className="site-title"
               style={{
                 fontFamily: "'Archivo Black', sans-serif",
                 fontSize: 30,
@@ -1261,13 +1283,16 @@ function App() {
         </div>
 
         {/* Nav */}
-        <div style={{ display: "flex", gap: 4, marginTop: 14, flexWrap: "wrap" }}>
+        <div className="site-nav" style={{ display: "flex", gap: 4, marginTop: 14, flexWrap: "wrap" }}>
           {TABS.map((t) => {
             const active = tab === t.id;
             return (
               <button
                 key={t.id}
-                onClick={() => setTab(t.id)}
+                onClick={(e) => {
+                  setTab(t.id);
+                  try { e.currentTarget.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" }); } catch (err) {}
+                }}
                 style={{
                   fontFamily: "'IBM Plex Mono', monospace",
                   fontSize: 12,
@@ -1290,7 +1315,7 @@ function App() {
         </div>
       </div>
 
-      <div className="page-wrap" style={{ padding: "14px 28px 28px" }}>
+      <div className="page-wrap site-main" style={{ padding: "14px 28px 28px" }}>
         {tab === "home" && (
           <HomeTab
             data={data}
@@ -1399,13 +1424,13 @@ function SortableTable({ columns, rows, rowKey, defaultSortKey, defaultSortDir =
   }
 
   return (
-    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+    <table className="sortable-table" style={{ width: "100%", borderCollapse: "collapse" }}>
       <thead>
         <tr style={{ background: COLORS.surfaceLight }}>
           {columns.map((col, i) => (
             <th
               key={col.key}
-              className={col.sortable === false ? undefined : "sortable-th"}
+              className={[`col-${col.key}`, col.sortable === false ? "" : "sortable-th"].join(" ").trim()}
               onClick={col.sortable === false ? undefined : () => onHeaderClick(col.key)}
               style={{
                 textAlign: col.align || (i === 0 ? "left" : "right"),
@@ -1432,6 +1457,7 @@ function SortableTable({ columns, rows, rowKey, defaultSortKey, defaultSortDir =
             {columns.map((col, ci) => (
               <td
                 key={col.key}
+                className={`col-${col.key}`}
                 style={{
                   padding: "8px 12px",
                   textAlign: col.align || (ci === 0 ? "left" : "right"),
@@ -1545,20 +1571,47 @@ function StandingsTab({ standings, playoffTeams, data, usersById }) {
   const streaks = useMemo(() => computeStreaks(weekMatchups, rosters), [weekMatchups, rosters]);
   const expectedWins = useMemo(() => computeExpectedWins(weekMatchups), [weekMatchups]);
 
+  // Seeding as Sleeper does it: with divisions on, each division's leader
+  // takes the top seeds, then the best remaining records. Ties go to points
+  // for (standings are already sorted that way).
+  const divisionCount = data.league?.settings?.divisions > 1 ? data.league.settings.divisions : 0;
+  const byeCount = playoffTeams === 6 ? 2 : 0;
+  const seedInfo = useMemo(() => {
+    const divOf = Object.fromEntries((rosters || []).map((r) => [r.roster_id, r.settings?.division ?? null]));
+    let seeded = standings.map((s) => s.rosterId);
+    const leaders = new Set();
+    if (divisionCount) {
+      const seen = new Set();
+      standings.forEach((s) => {
+        const d = divOf[s.rosterId];
+        if (d != null && !seen.has(d)) { seen.add(d); leaders.add(s.rosterId); }
+      });
+      seeded = [...seeded.filter((id) => leaders.has(id)), ...seeded.filter((id) => !leaders.has(id))];
+    }
+    const seedOf = Object.fromEntries(seeded.map((id, i) => [id, i + 1]));
+    return { seedOf, divOf, leaders };
+  }, [standings, rosters, divisionCount]);
+
   const seasonRows = useMemo(() => {
     return standings.map((s, i) => {
       const picture = playoffPicture.all[i];
+      const seed = seedInfo.seedOf[s.rosterId];
+      const inPlayoffs = !!playoffTeams && seed <= playoffTeams;
       return {
         ...s,
-        rowBg: playoffTeams && i < playoffTeams ? COLORS.turfTint : "transparent",
-        isPlayoffPosition: playoffTeams && i < playoffTeams,
+        seed,
+        division: seedInfo.divOf[s.rosterId],
+        divLeader: seedInfo.leaders.has(s.rosterId),
+        hasBye: byeCount > 0 && seed <= byeCount,
+        rowBg: inPlayoffs ? COLORS.turfTint : "transparent",
+        isPlayoffPosition: inPlayoffs,
         gamesBack: picture ? picture.gamesBack : 0,
         streak: streaks[s.rosterId] || null,
         expectedWins: expectedWins[s.rosterId] || 0,
         luck: s.wins - (expectedWins[s.rosterId] || 0),
       };
     });
-  }, [standings, playoffTeams, playoffPicture, streaks, expectedWins]);
+  }, [standings, playoffTeams, playoffPicture, streaks, expectedWins, seedInfo, byeCount]);
 
   const allTimeStandings = useMemo(() => {
     const career = {};
@@ -1624,9 +1677,32 @@ function StandingsTab({ standings, playoffTeams, data, usersById }) {
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <Crest name={r.name} logo={r.avatar} size={24} />
           <span style={{ fontWeight: 600, color: r.isPlayoffPosition ? COLORS.turf : COLORS.bone }}>{r.displayName}</span>
+          {divisionCount && r.division ? (
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: COLORS.muted, border: `1px solid ${COLORS.hairline}`, borderRadius: 4, padding: "1px 5px" }}>
+              D{r.division}
+            </span>
+          ) : null}
         </div>
       ),
     },
+    ...(playoffTeams
+      ? [{
+          key: "seed",
+          label: "Seed",
+          accessor: (r) => -r.seed,
+          render: (r) =>
+            r.isPlayoffPosition ? (
+              <span style={{ whiteSpace: "nowrap", color: COLORS.turf, fontWeight: 600 }}>
+                {r.seed}
+                {r.hasBye ? (
+                  <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: COLORS.gold, background: COLORS.orangeTint, borderRadius: 999, padding: "1px 6px" }}>BYE</span>
+                ) : null}
+              </span>
+            ) : (
+              <span style={{ color: COLORS.muted }}>-</span>
+            ),
+        }]
+      : []),
     { key: "wins", label: "W", accessor: (r) => r.wins },
     { key: "losses", label: "L", accessor: (r) => r.losses },
     { key: "ties", label: "T", accessor: (r) => r.ties },
@@ -1741,11 +1817,14 @@ function StandingsTab({ standings, playoffTeams, data, usersById }) {
           {playoffTeams ? (
             <div style={{ fontSize: 11, color: COLORS.muted, marginTop: 8 }}>
               <span style={{ display: "inline-block", width: 10, height: 10, background: COLORS.turfTint, border: `1px solid ${COLORS.turf}`, borderRadius: 2, marginRight: 6, verticalAlign: "middle" }} />
-              Currently in playoff position (top {playoffTeams}). This stays tied to actual record even if you sort
-              by another column. Luck compares actual wins to how many teams you'd have beaten each week if everyone
+              {divisionCount
+                ? `Currently in playoff position (top ${playoffTeams} seeds). Each division's leader takes a top-${divisionCount} seed${byeCount === divisionCount ? " and a bye" : ""}, then the best remaining records fill in. D1 and D2 mark each team's division.`
+                : `Currently in playoff position (top ${playoffTeams}).`}{" "}
+              This stays tied to actual seeding even if you sort by another column. Luck compares actual wins to how many teams you'd have beaten each week if everyone
               played everyone, positive means your record is running ahead of your points, negative means it's not.
             </div>
           ) : null}
+          <PlayoffOdds data={data} />
         </div>
       ) : (
         <div>
@@ -1917,6 +1996,12 @@ function MatchupsTab({ matchups, rostersById, usersById, week, seasonType }) {
   }, [matchups]);
 
   const isActiveSeason = seasonType === "regular" || seasonType === "post";
+  const notStarted = matchups.length > 0 && matchups.every((m) => !m.points);
+  const recordFor = (rosterId) => {
+    const st = rostersById[rosterId]?.settings;
+    if (!st) return "";
+    return `${st.wins ?? 0}-${st.losses ?? 0}${st.ties ? `-${st.ties}` : ""}`;
+  };
 
   if (!isActiveSeason) {
     return (
@@ -1950,6 +2035,11 @@ function MatchupsTab({ matchups, rostersById, usersById, week, seasonType }) {
       <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
         Head to head, winner takes the bragging rights and the loser takes the group chat abuse. That's the deal.
       </div>
+      {notStarted && (
+        <div style={{ fontSize: 13, color: COLORS.leatherDeep, background: COLORS.leatherTint, borderLeft: `3px solid ${COLORS.leather}`, padding: "8px 12px", borderRadius: 6, marginBottom: 10 }}>
+          No points on the board yet. Records shown until kickoff.
+        </div>
+      )}
       <BalancedGrid
         items={grouped.map((pair, i) => {
           const [a, b] = pair;
@@ -1966,9 +2056,9 @@ function MatchupsTab({ matchups, rostersById, usersById, week, seasonType }) {
             key: i,
             node: (
               <Card>
-                <MatchupRow name={nameA} label={labelA} logo={avatarUrl(teamA)} score={scoreA} leading={aLeads && !!b} />
+                <MatchupRow name={nameA} label={labelA} logo={avatarUrl(teamA)} score={scoreA} leading={!notStarted && aLeads && !!b} record={notStarted ? recordFor(a?.roster_id) : null} />
                 <div style={{ height: 1, background: COLORS.hairline, margin: "10px 0" }} />
-                <MatchupRow name={nameB} label={labelB} logo={b ? avatarUrl(teamB) : null} score={scoreB} leading={!aLeads && !!b} />
+                <MatchupRow name={nameB} label={labelB} logo={b ? avatarUrl(teamB) : null} score={scoreB} leading={!notStarted && !aLeads && !!b} record={notStarted && b ? recordFor(b?.roster_id) : null} />
               </Card>
             ),
           };
@@ -1978,24 +2068,277 @@ function MatchupsTab({ matchups, rostersById, usersById, week, seasonType }) {
   );
 }
 
-function MatchupRow({ name, label, logo, score, leading }) {
+function MatchupRow({ name, label, logo, score, leading, record }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
         <Crest name={name} logo={logo} size={28} />
-        <span style={{ fontWeight: leading ? 700 : 500, color: leading ? COLORS.bone : COLORS.muted }}>
+        <span style={{ fontWeight: leading || record ? 700 : 500, color: leading || record ? COLORS.bone : COLORS.muted }}>
           {label}
         </span>
       </div>
       <span
         style={{
           fontFamily: "'IBM Plex Mono', monospace",
-          fontSize: 18,
+          fontSize: record ? 15 : 18,
           color: leading ? COLORS.gold : COLORS.muted,
+          whiteSpace: "nowrap",
+          flexShrink: 0,
         }}
       >
-        {fmt(score)}
+        {record || fmt(score)}
       </span>
+    </div>
+  );
+}
+
+
+// ---- Playoff odds ----
+// Monte Carlo sim of the rest of the regular season. Each team's weekly
+// score is drawn from a normal curve built off its own scores this season,
+// pulled a little toward the league average so one monster week doesn't
+// dominate. Seeding follows Sleeper's default: wins, then points for.
+const SIM_RUNS = 10000;
+
+function randNormal() {
+  let u = 0, v = 0;
+  while (u === 0) u = Math.random();
+  while (v === 0) v = Math.random();
+  return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+}
+
+function PlayoffOdds({ data }) {
+  const { league, rosters, users, week, seasonType, weekMatchups, matchups } = data;
+  const settings = league?.settings || {};
+  const playoffStart = settings.playoff_week_start || 15;
+  const playoffTeams = settings.playoff_teams || 6;
+  const byes = playoffTeams === 6 ? 2 : 0;
+  // With divisions on, Sleeper seeds the division winners first (verified
+  // against the 2025 bracket: 9-5 division winner got a bye over a 10-4 team).
+  const divisionCount = settings.divisions > 1 ? settings.divisions : 0;
+  const remainingWeeks = useMemo(() => {
+    const out = [];
+    for (let w = week; w < playoffStart; w++) out.push(w);
+    return out;
+  }, [week, playoffStart]);
+
+  const [schedule, setSchedule] = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    if (seasonType !== "regular" || remainingWeeks.length === 0) return;
+    let cancelled = false;
+    Promise.all(
+      remainingWeeks.map((w) =>
+        w === week && matchups?.length
+          ? Promise.resolve(matchups)
+          : fetch(`${API}/league/${league?.league_id || LEAGUE_ID}/matchups/${w}`).then((r) => (r.ok ? r.json() : []))
+      )
+    )
+      .then((weeks) => {
+        if (cancelled) return;
+        const games = [];
+        weeks.forEach((ms, i) => {
+          const byId = {};
+          (ms || []).forEach((m) => {
+            if (m.matchup_id == null) return;
+            (byId[m.matchup_id] = byId[m.matchup_id] || []).push(m.roster_id);
+          });
+          Object.values(byId).forEach((pair) => {
+            if (pair.length === 2) games.push({ week: remainingWeeks[i], a: pair[0], b: pair[1] });
+          });
+        });
+        setSchedule(games);
+      })
+      .catch((e) => !cancelled && setError(e.message));
+    return () => { cancelled = true; };
+  }, [seasonType, remainingWeeks, league, week, matchups]);
+
+  const results = useMemo(() => {
+    if (!schedule || !rosters?.length) return null;
+    const byOwner = Object.fromEntries((users || []).map((u) => [u.user_id, u]));
+
+    // Score model per roster from completed weeks this season
+    const scores = {};
+    rosters.forEach((r) => { scores[r.roster_id] = []; });
+    Object.entries(weekMatchups || {}).forEach(([w, ms]) => {
+      if (Number(w) >= week) return;
+      (ms || []).forEach((m) => { if (m.points > 0 && scores[m.roster_id]) scores[m.roster_id].push(m.points); });
+    });
+    const all = Object.values(scores).flat();
+    const lgMean = all.length ? all.reduce((a, b) => a + b, 0) / all.length : 110;
+    const lgSd = all.length > 1 ? Math.sqrt(all.reduce((a, b) => a + (b - lgMean) ** 2, 0) / (all.length - 1)) : 25;
+    const SHRINK = 3; // games' worth of league-average prior
+    const model = {};
+    rosters.forEach((r) => {
+      const xs = scores[r.roster_id];
+      const n = xs.length;
+      const mean = n ? xs.reduce((a, b) => a + b, 0) / n : lgMean;
+      const sd = n > 1 ? Math.sqrt(xs.reduce((a, b) => a + (b - mean) ** 2, 0) / (n - 1)) : lgSd;
+      model[r.roster_id] = {
+        mean: (n * mean + SHRINK * lgMean) / (n + SHRINK),
+        sd: Math.max(12, (n * sd + SHRINK * lgSd) / (n + SHRINK)),
+      };
+    });
+
+    const base = rosters.map((r) => ({
+      id: r.roster_id,
+      wins: (r.settings?.wins ?? 0) + (r.settings?.ties ?? 0) * 0.5,
+      pf: (r.settings?.fpts ?? 0) + (r.settings?.fpts_decimal ?? 0) / 100,
+    }));
+    const tally = {};
+    base.forEach((t) => { tally[t.id] = { playoff: 0, bye: 0, first: 0, last: 0, wins: 0, div: 0 }; });
+    const divOf = rosters.map((r) => (divisionCount ? r.settings?.division ?? null : null));
+
+    const idx = Object.fromEntries(base.map((t, i) => [t.id, i]));
+    const wins = new Float64Array(base.length);
+    const pf = new Float64Array(base.length);
+    const order = base.map((_, i) => i);
+    for (let run = 0; run < SIM_RUNS; run++) {
+      base.forEach((t, i) => { wins[i] = t.wins; pf[i] = t.pf; });
+      for (const g of schedule) {
+        const ia = idx[g.a], ib = idx[g.b];
+        if (ia == null || ib == null) continue;
+        const ma = model[g.a], mb = model[g.b];
+        const sa = Math.max(0, ma.mean + ma.sd * randNormal());
+        const sb = Math.max(0, mb.mean + mb.sd * randNormal());
+        pf[ia] += sa; pf[ib] += sb;
+        if (sa > sb) wins[ia] += 1; else if (sb > sa) wins[ib] += 1; else { wins[ia] += 0.5; wins[ib] += 0.5; }
+      }
+      order.sort((x, y) => wins[y] - wins[x] || pf[y] - pf[x]);
+      let seeds = order;
+      if (divisionCount) {
+        const seen = new Set();
+        const winners = [];
+        order.forEach((ti) => {
+          const d = divOf[ti];
+          if (d != null && !seen.has(d)) { seen.add(d); winners.push(ti); }
+        });
+        seeds = [...winners, ...order.filter((ti) => !winners.includes(ti))];
+        winners.forEach((ti) => { tally[base[ti].id].div++; });
+      }
+      seeds.forEach((ti, rank) => {
+        const t = tally[base[ti].id];
+        t.wins += wins[ti];
+        if (rank < playoffTeams) t.playoff++;
+        if (rank < byes) t.bye++;
+        if (rank === 0) t.first++;
+        if (ti === order[order.length - 1]) t.last++;
+      });
+    }
+
+    return rosters
+      .map((r) => {
+        const t = tally[r.roster_id];
+        const u = byOwner[r.owner_id];
+        return {
+          rosterId: r.roster_id,
+          name: teamName(u),
+          displayName: withOwner(u),
+          avatar: avatarUrl(u),
+          record: `${r.settings?.wins ?? 0}-${r.settings?.losses ?? 0}${r.settings?.ties ? `-${r.settings.ties}` : ""}`,
+          projWins: t.wins / SIM_RUNS,
+          playoff: t.playoff / SIM_RUNS,
+          bye: t.bye / SIM_RUNS,
+          first: t.first / SIM_RUNS,
+          divTitle: t.div / SIM_RUNS,
+          division: r.settings?.division,
+          last: t.last / SIM_RUNS,
+          proj: model[r.roster_id].mean,
+        };
+      })
+      .sort((a, b) => b.playoff - a.playoff || b.bye - a.bye || b.projWins - a.projWins);
+  }, [schedule, rosters, users, weekMatchups, week, playoffTeams, byes, divisionCount]);
+
+  if (seasonType !== "regular" || remainingWeeks.length === 0) return null;
+
+  const pct = (x, kind) => {
+    if (x >= 1) return kind === "last" ? "Doomed" : "Lock";
+    if (x <= 0) return kind === "playoff" ? "Out" : "-";
+    if (x > 0.995) return ">99%";
+    if (x < 0.005) return "<1%";
+    return `${Math.round(x * 100)}%`;
+  };
+  const th = (label, align = "right") => (
+    <th style={{ textAlign: align, padding: "7px 12px", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: "0.06em", color: COLORS.muted, textTransform: "uppercase", whiteSpace: "nowrap" }}>
+      {label}
+    </th>
+  );
+  const mono = { padding: "8px 12px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, whiteSpace: "nowrap" };
+  const weeksLeft = remainingWeeks.length;
+
+  return (
+    <div style={{ marginTop: 22 }}>
+      <SectionLabel>Playoff odds</SectionLabel>
+      <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
+        {weeksLeft} {weeksLeft === 1 ? "week" : "weeks"} left (Weeks {remainingWeeks[0]}{weeksLeft > 1 ? `-${remainingWeeks[weeksLeft - 1]}` : ""}) and{" "}
+        {SIM_RUNS.toLocaleString()} simulated seasons using every team's real schedule and how they've actually scored.{" "}
+        {divisionCount
+          ? `Division winners take the top ${divisionCount} seeds${byes === divisionCount ? " and the byes" : ""}, then the best remaining records fill out the top ${playoffTeams}. Ties go to points for. `
+          : `Top ${playoffTeams} make it${byes ? `, top ${byes} get the bye` : ""}. `}
+        Math doesn't care about your feelings.
+      </div>
+      {error ? (
+        <Card><div style={{ color: COLORS.muted }}>Couldn't load the remaining schedule from Sleeper. Refresh to try again.</div></Card>
+      ) : !results ? (
+        <Card><div style={{ color: COLORS.muted }}>Running the simulations...</div></Card>
+      ) : (
+        <Card style={{ padding: 0, overflow: "hidden" }}>
+          <div style={{ overflowX: "auto" }}>
+            <table className="sortable-table" style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ background: COLORS.surfaceLight }}>
+                  <th className="col-team" style={{ textAlign: "left", padding: "7px 12px", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: "0.06em", color: COLORS.muted, textTransform: "uppercase" }}>Team</th>
+                  {th("Record")}
+                  {th("Proj W")}
+                  {th("Playoffs", "left")}
+                  {divisionCount ? th("Win div") : null}
+                  {byes && byes !== divisionCount ? th("Bye") : null}
+                  {th("#1 seed")}
+                  {th("Last place")}
+                </tr>
+              </thead>
+              <tbody>
+                {results.map((r) => (
+                  <tr key={r.rosterId} style={{ borderTop: `1px solid ${COLORS.hairline}` }}>
+                    <td className="col-team" style={{ padding: "8px 12px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <Crest name={r.name} logo={r.avatar} size={24} />
+                        <span style={{ fontWeight: 600 }}>{r.displayName}</span>
+                        {divisionCount && r.division ? (
+                          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: COLORS.muted, border: `1px solid ${COLORS.hairline}`, borderRadius: 4, padding: "1px 5px" }}>
+                            D{r.division}
+                          </span>
+                        ) : null}
+                      </div>
+                    </td>
+                    <td style={{ ...mono, color: COLORS.muted }}>{r.record}</td>
+                    <td style={mono}>{fmt(r.projWins, 1)}</td>
+                    <td style={{ ...mono, textAlign: "left", minWidth: 150 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <div style={{ flex: 1, height: 8, background: COLORS.surfaceLight, borderRadius: 4, overflow: "hidden", minWidth: 70 }}>
+                          <div style={{ width: `${r.playoff * 100}%`, height: "100%", background: r.playoff >= 0.5 ? COLORS.turf : COLORS.gold }} />
+                        </div>
+                        <span style={{ fontWeight: 700, color: r.playoff >= 0.5 ? COLORS.turf : r.playoff > 0 ? COLORS.goldDim : COLORS.muted, width: 46, textAlign: "right" }}>
+                          {pct(r.playoff, "playoff")}
+                        </span>
+                      </div>
+                    </td>
+                    {divisionCount ? <td style={mono}>{pct(r.divTitle)}</td> : null}
+                    {byes && byes !== divisionCount ? <td style={mono}>{pct(r.bye)}</td> : null}
+                    <td style={mono}>{pct(r.first)}</td>
+                    <td style={{ ...mono, color: r.last >= 0.2 ? COLORS.red : undefined }}>{pct(r.last, "last")}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+      <div style={{ fontSize: 11, color: COLORS.muted, marginTop: 8 }}>
+        "Lock" and "Out" mean it happened in every simulation, not that it's mathematically official. Projected wins
+        include current wins. Odds refresh every time the page loads, so they'll move a point or two run to run.
+      </div>
     </div>
   );
 }
@@ -3573,7 +3916,24 @@ function RostersTab({ rosters, usersById, players, selectedRosterId, setSelected
       <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
         Every player, every team. This is the actual roster of assets you're betting your season, and your ego, on.
       </div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+      <select
+        className="mobile-only"
+        value={roster?.roster_id ?? ""}
+        onChange={(e) => setSelectedRosterId(Number(e.target.value))}
+        style={{
+          width: "100%", marginBottom: 12, padding: "10px 12px", fontSize: 15, fontWeight: 600,
+          borderRadius: 8, border: `1px solid ${COLORS.gold}`, background: COLORS.surface, color: COLORS.turf,
+        }}
+      >
+        {rosters.map((r) => {
+          const u = usersById[r.owner_id];
+          const faab = data.league?.settings?.waiver_budget > 0
+            ? ` · $${Math.max(0, data.league.settings.waiver_budget - (r.settings?.waiver_budget_used || 0))} FAAB`
+            : "";
+          return <option key={r.roster_id} value={r.roster_id}>{withOwner(u)}{faab}</option>;
+        })}
+      </select>
+      <div className="desktop-only" style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
         {rosters.map((r) => {
           const u = usersById[r.owner_id];
           const active = r.roster_id === (roster?.roster_id);
@@ -3653,7 +4013,7 @@ function RostersTab({ rosters, usersById, players, selectedRosterId, setSelected
               )}
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 12 }}>
+            <div className="roster-cols" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 12 }}>
               <div>
                 <SectionLabel>Starters</SectionLabel>
                 {(roster.starters || []).map((pid, i) => (
@@ -4737,8 +5097,7 @@ function DraftPicksTab({ rosters, usersById, tradedPicks, draftRounds, currentSe
       <SectionLabel>Draft picks</SectionLabel>
       <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
         Every team's draft capital for the next two classes. This is the future you're trading away, so look before
-        you deal it. Picks not shown here simply haven't been traded, meaning they're still with whoever originally
-        owned them.
+        you deal it. Picks marked "via" were acquired in a trade, and the rest are still with their original owner.
       </div>
 
       <div style={{ display: "flex", gap: 4, marginBottom: 12 }}>
@@ -5534,9 +5893,96 @@ function useLeagueSuperlatives(data, standings, usersById) {
 
   const mostTitles = championsByOwner[0];
 
+  // What each manager called their team in a given season, so all-time
+  // records can show "2025 as Bijan al-Gaib" even after a rename.
+  const teamNameIn = (ownerId, season) => {
+    if (!ownerId) return null;
+    const hist = seasonHistory.find((s) => String(s.season) === String(season));
+    const pool = hist ? hist.users || [] : users;
+    const u = pool.find((x) => x.user_id === ownerId);
+    return u ? teamName(u) : null;
+  };
+
+  // Game-level records across every linked season, regular season only
+  // (playoff and consolation weeks skipped), ignoring unplayed 0-0 games.
+  const gameRecords = useMemo(() => {
+    const seasons = [
+      ...seasonHistory.map((s) => ({
+        season: s.season, weekMatchups: s.weekMatchups || {}, rosters: s.rosters || [],
+        playoffWeekStart: s.playoffWeekStart || 15,
+      })),
+      {
+        season: league?.season, weekMatchups: weekMatchups || {}, rosters,
+        playoffWeekStart: league?.settings?.playoff_week_start || 15,
+      },
+    ].sort((a, b) => Number(a.season) - Number(b.season));
+
+    let blowout = null, closest = null, lowGame = null, longestStreak = null;
+    const careerPA = {};
+    const streaks = {}; // ownerId -> { len, startSeason, startWeek }
+
+    seasons.forEach((sz) => {
+      const ownerOf = (rid) => sz.rosters.find((r) => r.roster_id === rid)?.owner_id;
+      Object.keys(sz.weekMatchups).map(Number).sort((a, b) => a - b).forEach((week) => {
+        if (week >= sz.playoffWeekStart) return;
+        const byId = {};
+        (sz.weekMatchups[week] || []).forEach((m) => {
+          if (m.matchup_id == null) return;
+          (byId[m.matchup_id] = byId[m.matchup_id] || []).push(m);
+        });
+        Object.values(byId).forEach((pair) => {
+          if (pair.length !== 2) return;
+          const [a, b] = pair;
+          const pa = a.points ?? 0, pb = b.points ?? 0;
+          if (!pa || !pb) return;
+          const oa = ownerOf(a.roster_id), ob = ownerOf(b.roster_id);
+          if (!oa || !ob) return;
+          const margin = Math.abs(pa - pb);
+          const [w, l, wp, lp] = pa >= pb ? [oa, ob, pa, pb] : [ob, oa, pb, pa];
+          const game = { winner: w, loser: l, winnerPts: wp, loserPts: lp, margin, week, season: sz.season };
+          if (!blowout || margin > blowout.margin) blowout = game;
+          if (!closest || margin < closest.margin) closest = game;
+          [[oa, pa], [ob, pb]].forEach(([o, pts]) => {
+            if (!lowGame || pts < lowGame.points) lowGame = { ownerId: o, points: pts, week, season: sz.season };
+          });
+          careerPA[oa] = (careerPA[oa] || 0) + pb;
+          careerPA[ob] = (careerPA[ob] || 0) + pa;
+          [[oa, pa > pb], [ob, pb > pa]].forEach(([o, won]) => {
+            if (won) {
+              const cur = streaks[o] && streaks[o].len > 0 ? streaks[o] : { len: 0, startSeason: sz.season, startWeek: week };
+              cur.len += 1;
+              cur.endSeason = sz.season; cur.endWeek = week;
+              streaks[o] = cur;
+              if (!longestStreak || cur.len > longestStreak.len) longestStreak = { ownerId: o, ...cur };
+            } else {
+              streaks[o] = { len: 0 };
+            }
+          });
+        });
+      });
+    });
+
+    let mostPA = null;
+    Object.entries(careerPA).forEach(([ownerId, pts]) => {
+      if (!mostPA || pts > mostPA.points) mostPA = { ownerId, points: pts };
+    });
+    return { blowout, closest, lowGame, longestStreak, mostPA };
+  }, [seasonHistory, weekMatchups, rosters, league]);
+
+  const mostCareerPoints = useMemo(() => {
+    const totals = {};
+    allSeasonEntries.forEach((e) => (e.standings || []).forEach((s) => {
+      if (s.ownerId) totals[s.ownerId] = (totals[s.ownerId] || 0) + (s.fpts || 0);
+    }));
+    let best = null;
+    Object.entries(totals).forEach(([ownerId, pts]) => { if (!best || pts > best.points) best = { ownerId, points: pts }; });
+    return best;
+  }, [allSeasonEntries]);
+
   return {
     championsByOwner, orderedTitles, currentSeasonSuper, ownerForRoster, wallOfShame,
     historyRows, ownerDirectory, allSeasonEntries, allTimeSuperlatives, mostTitles,
+    teamNameIn, gameRecords, mostCareerPoints,
   };
 }
 
@@ -5569,13 +6015,17 @@ function PodiumRow({ season, champion, runnerUp, third }) {
                 marginBottom: 6,
                 color: st.place === 1 ? COLORS.turf : COLORS.muted,
                 fontWeight: st.place === 1 ? 600 : 400,
-                maxWidth: 90,
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
+                lineHeight: 1.25,
+                width: "100%",
+                overflowWrap: "anywhere",
               }}
             >
-              {st.user ? withOwner(st.user) : "-"}
+              {st.user ? teamName(st.user) : "-"}
+              {st.user && REAL_NAMES[(st.user.display_name || "").toLowerCase()] && (
+                <div style={{ fontSize: 10, color: COLORS.muted, fontWeight: 400 }}>
+                  {REAL_NAMES[(st.user.display_name || "").toLowerCase()]}
+                </div>
+              )}
             </div>
             <div
               style={{
@@ -5603,7 +6053,18 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
   const {
     championsByOwner, orderedTitles, currentSeasonSuper, ownerForRoster,
     wallOfShame, historyRows, ownerDirectory, allTimeSuperlatives, mostTitles,
+    teamNameIn, gameRecords, mostCareerPoints,
   } = superlatives;
+  const ownerById = (id) => (id && (usersById[id] || ownerDirectory[id])) || null;
+  // "2025 as Bijan al-Gaib" for a record set in a specific season
+  const asOf = (ownerId, season) => {
+    const n = teamNameIn(ownerId, season);
+    return n ? `${season} as ${n}` : `${season}`;
+  };
+  // Career/all-time cards show each manager under their current team name.
+  // Season-specific spots (banners, podiums, wall of shame) keep the name
+  // they had that year.
+  const currentUser = (u) => (u && usersById[u.user_id]) || u;
 
   function playerLabel(pid) {
     const p = players?.[pid];
@@ -5747,12 +6208,14 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
               {championsByOwner.map((c) => (
                 <Card
                   key={c.user.user_id}
-                  style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", borderLeft: `3px solid ${teamColor(teamName(c.user))}` }}
+                  style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", borderLeft: `3px solid ${teamColor(teamName(currentUser(c.user)))}` }}
                 >
-                  <Crest name={teamName(c.user)} logo={avatarUrl(c.user)} size={32} />
+                  <Crest name={teamName(currentUser(c.user))} logo={avatarUrl(currentUser(c.user))} size={32} />
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 600 }}>{withOwner(c.user)}</div>
-                    <div style={{ fontSize: 12, color: COLORS.muted }}>{c.years.slice().sort().join(", ")}</div>
+                    <div style={{ fontWeight: 600 }}>{withOwner(currentUser(c.user))}</div>
+                    <div style={{ fontSize: 11, color: COLORS.muted, marginTop: 2 }}>
+                      {c.years.slice().sort().map((y) => asOf(c.user.user_id, y)).join(" · ")}
+                    </div>
                   </div>
                   <div style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 18, color: COLORS.gold, whiteSpace: "nowrap", flexShrink: 0 }}>
                     {c.years.length} {c.years.length === 1 ? "title" : "titles"}
@@ -5761,85 +6224,7 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
               ))}
             </div>
           )}
-        </div>
-      </div>
-
-      {/* League history: podium by year */}
-      <SectionLabel>League history</SectionLabel>
-      {historyRows.length === 0 ? (
-        <Card style={{ marginBottom: 14 }}>
-          <div style={{ color: COLORS.muted }}>
-            This is the earliest linked season for your league. History fills in automatically as seasons stack up.
-          </div>
-        </Card>
-      ) : (
-        <div style={{ marginBottom: 14 }}>
-          <BalancedGrid
-            items={historyRows.map((s) => ({
-              key: s.season,
-              node: <PodiumRow season={s.season} champion={s.champion} runnerUp={s.runnerUp} third={s.third} />,
-            }))}
-          />
-        </div>
-      )}
-
-      {/* Superlatives + Wall of shame, side by side */}
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-        <div style={{ flex: "1 1 320px", minWidth: 280 }}>
-          <SectionLabel>All-time superlatives</SectionLabel>
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <SuperlativeCard
-              accent={SUPERLATIVE_ACCENTS[0]}
-              label="Most titles"
-              value={mostTitles ? `${mostTitles.years.length} ${mostTitles.years.length === 1 ? "title" : "titles"}` : "-"}
-              user={mostTitles?.user}
-            />
-            <SuperlativeCard
-              accent={SUPERLATIVE_ACCENTS[1]}
-              label="Most playoff wins"
-              value={allTimeSuperlatives.mostPlayoffWins ? `${allTimeSuperlatives.mostPlayoffWins.wins} wins` : "-"}
-              user={allTimeSuperlatives.mostPlayoffWins ? ownerDirectory[allTimeSuperlatives.mostPlayoffWins.ownerId] : null}
-            />
-            <SuperlativeCard
-              accent={SUPERLATIVE_ACCENTS[2]}
-              label="Best win %"
-              value={allTimeSuperlatives.bestWinPct ? `${fmt(allTimeSuperlatives.bestWinPct.pct * 100, 0)}% (${allTimeSuperlatives.bestWinPct.wins}-${allTimeSuperlatives.bestWinPct.losses})` : "-"}
-              user={allTimeSuperlatives.bestWinPct ? ownerDirectory[allTimeSuperlatives.bestWinPct.ownerId] : null}
-            />
-            <SuperlativeCard
-              accent={SUPERLATIVE_ACCENTS[3]}
-              label="Highest career PPG"
-              value={allTimeSuperlatives.bestPPG ? `${fmt(allTimeSuperlatives.bestPPG.ppg)} pts` : "-"}
-              user={allTimeSuperlatives.bestPPG ? ownerDirectory[allTimeSuperlatives.bestPPG.ownerId] : null}
-            />
-            <SuperlativeCard
-              accent={SUPERLATIVE_ACCENTS[4]}
-              label="Best regular season"
-              value={allTimeSuperlatives.bestSeason ? `${allTimeSuperlatives.bestSeason.wins}-${allTimeSuperlatives.bestSeason.losses} · ${allTimeSuperlatives.bestSeason.season}` : "-"}
-              user={allTimeSuperlatives.bestSeason ? ownerDirectory[allTimeSuperlatives.bestSeason.ownerId] : null}
-            />
-            <SuperlativeCard
-              accent={SUPERLATIVE_ACCENTS[5]}
-              label="Highest scoring season"
-              value={allTimeSuperlatives.highestScoringSeason ? `${fmt(allTimeSuperlatives.highestScoringSeason.fpts)} pts · ${allTimeSuperlatives.highestScoringSeason.season}` : "-"}
-              user={allTimeSuperlatives.highestScoringSeason ? ownerDirectory[allTimeSuperlatives.highestScoringSeason.ownerId] : null}
-            />
-            <SuperlativeCard
-              accent={SUPERLATIVE_ACCENTS[6]}
-              label="Highest scoring week"
-              value={allTimeSuperlatives.singleGame ? `${fmt(allTimeSuperlatives.singleGame.points)} pts · Wk ${allTimeSuperlatives.singleGame.week}, ${allTimeSuperlatives.singleGame.season}` : "-"}
-              user={allTimeSuperlatives.singleGame?.owner}
-            />
-            <SuperlativeCard
-              accent={SUPERLATIVE_ACCENTS[7]}
-              label="Single-game record"
-              sublabel={allTimeSuperlatives.bestPlayerRecord ? playerLabel(allTimeSuperlatives.bestPlayerRecord.playerId) : null}
-              value={allTimeSuperlatives.bestPlayerRecord ? `${fmt(allTimeSuperlatives.bestPlayerRecord.points)} pts · Wk ${allTimeSuperlatives.bestPlayerRecord.week}, ${allTimeSuperlatives.bestPlayerRecord.season}` : "-"}
-              user={allTimeSuperlatives.bestPlayerRecord?.owner}
-            />
-          </div>
-        </div>
-        <div style={{ flex: "1 1 320px", minWidth: 280 }}>
+        <div style={{ marginTop: 16 }}>
           <SectionLabel>Wall of shame (last place by year)</SectionLabel>
           {wallOfShame.length === 0 ? (
             <Card>
@@ -5869,6 +6254,144 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
             </div>
           )}
         </div>
+        </div>
+      </div>
+
+      {/* League history: podium by year */}
+      <SectionLabel>League history</SectionLabel>
+      {historyRows.length === 0 ? (
+        <Card style={{ marginBottom: 14 }}>
+          <div style={{ color: COLORS.muted }}>
+            This is the earliest linked season for your league. History fills in automatically as seasons stack up.
+          </div>
+        </Card>
+      ) : (
+        <div style={{ marginBottom: 14 }}>
+          <BalancedGrid
+            items={historyRows.map((s) => ({
+              key: s.season,
+              node: <PodiumRow season={s.season} champion={s.champion} runnerUp={s.runnerUp} third={s.third} />,
+            }))}
+          />
+        </div>
+      )}
+
+      {/* Superlatives + Wall of shame, side by side */}
+      <div>
+        <div>
+          <SectionLabel>All-time superlatives</SectionLabel>
+          <div className="home-super-grid">
+            {(() => {
+              const A = allTimeSuperlatives;
+              const G = gameRecords || {};
+              const pick = (cond, card) => (cond ? [card] : []);
+              const cards = [
+                {
+                  label: "Most titles",
+                  value: mostTitles ? `${mostTitles.years.length} ${mostTitles.years.length === 1 ? "title" : "titles"}` : "-",
+                  user: currentUser(mostTitles?.user),
+                  note: mostTitles ? mostTitles.years.slice().sort().map((y) => asOf(mostTitles.user.user_id, y)).join(" · ") : null,
+                },
+                {
+                  label: "Most playoff wins",
+                  value: A.mostPlayoffWins ? `${A.mostPlayoffWins.wins} wins` : "-",
+                  user: ownerById(A.mostPlayoffWins?.ownerId),
+                },
+                {
+                  label: "Best career win %",
+                  value: A.bestWinPct ? `${fmt(A.bestWinPct.pct * 100, 0)}%` : "-",
+                  user: ownerById(A.bestWinPct?.ownerId),
+                  sub: A.bestWinPct ? `${A.bestWinPct.wins}-${A.bestWinPct.losses} career record` : null,
+                },
+                {
+                  label: "Highest career PPG",
+                  value: A.bestPPG ? `${fmt(A.bestPPG.ppg)} pts` : "-",
+                  user: ownerById(A.bestPPG?.ownerId),
+                },
+                ...pick(mostCareerPoints, {
+                  label: "Most career points",
+                  value: mostCareerPoints ? `${fmt(mostCareerPoints.points, 0)} pts` : "-",
+                  user: ownerById(mostCareerPoints?.ownerId),
+                }),
+                ...pick(G.mostPA, {
+                  label: "Most points against",
+                  value: G.mostPA ? `${fmt(G.mostPA.points, 0)} pts` : "-",
+                  user: ownerById(G.mostPA?.ownerId),
+                  sub: "Career, regular season. Somebody hates this guy.",
+                }),
+                {
+                  label: "Best regular season",
+                  value: A.bestSeason ? `${A.bestSeason.wins}-${A.bestSeason.losses}` : "-",
+                  user: ownerById(A.bestSeason?.ownerId),
+                  note: A.bestSeason ? asOf(A.bestSeason.ownerId, A.bestSeason.season) : null,
+                },
+                {
+                  label: "Highest scoring season",
+                  value: A.highestScoringSeason ? `${fmt(A.highestScoringSeason.fpts)} pts` : "-",
+                  user: ownerById(A.highestScoringSeason?.ownerId),
+                  note: A.highestScoringSeason ? asOf(A.highestScoringSeason.ownerId, A.highestScoringSeason.season) : null,
+                },
+                ...pick(G.longestStreak, {
+                  label: "Longest win streak",
+                  value: G.longestStreak ? `${G.longestStreak.len} straight` : "-",
+                  user: ownerById(G.longestStreak?.ownerId),
+                  sub: G.longestStreak
+                    ? (G.longestStreak.startSeason === G.longestStreak.endSeason
+                        ? `Weeks ${G.longestStreak.startWeek}-${G.longestStreak.endWeek}, ${G.longestStreak.endSeason}`
+                        : `Wk ${G.longestStreak.startWeek}, ${G.longestStreak.startSeason} to Wk ${G.longestStreak.endWeek}, ${G.longestStreak.endSeason}`)
+                    : null,
+                  note: G.longestStreak ? asOf(G.longestStreak.ownerId, G.longestStreak.endSeason) : null,
+                }),
+                {
+                  label: "Highest scoring week",
+                  value: A.singleGame ? `${fmt(A.singleGame.points)} pts` : "-",
+                  user: currentUser(A.singleGame?.owner),
+                  sub: A.singleGame ? `Week ${A.singleGame.week}` : null,
+                  note: A.singleGame ? asOf(A.singleGame.owner?.user_id, A.singleGame.season) : null,
+                },
+                ...pick(G.lowGame, {
+                  label: "Lowest scoring week",
+                  value: G.lowGame ? `${fmt(G.lowGame.points)} pts` : "-",
+                  user: ownerById(G.lowGame?.ownerId),
+                  sub: G.lowGame ? `Week ${G.lowGame.week}` : null,
+                  note: G.lowGame ? asOf(G.lowGame.ownerId, G.lowGame.season) : null,
+                }),
+                ...pick(G.blowout, {
+                  label: "Biggest blowout",
+                  value: G.blowout ? `+${fmt(G.blowout.margin)}` : "-",
+                  user: ownerById(G.blowout?.winner),
+                  sub: G.blowout ? `${fmt(G.blowout.winnerPts)} to ${fmt(G.blowout.loserPts)} over ${teamNameIn(G.blowout.loser, G.blowout.season) || "?"}, Week ${G.blowout.week}` : null,
+                  note: G.blowout ? asOf(G.blowout.winner, G.blowout.season) : null,
+                }),
+                ...pick(G.closest, {
+                  label: "Closest game",
+                  value: G.closest ? `${fmt(G.closest.margin, 2)} pts` : "-",
+                  user: ownerById(G.closest?.winner),
+                  sub: G.closest ? `${fmt(G.closest.winnerPts)} to ${fmt(G.closest.loserPts)} over ${teamNameIn(G.closest.loser, G.closest.season) || "?"}, Week ${G.closest.week}` : null,
+                  note: G.closest ? asOf(G.closest.winner, G.closest.season) : null,
+                }),
+                {
+                  label: "Best player game",
+                  value: A.bestPlayerRecord ? `${fmt(A.bestPlayerRecord.points)} pts` : "-",
+                  user: currentUser(A.bestPlayerRecord?.owner),
+                  sub: A.bestPlayerRecord ? `${playerLabel(A.bestPlayerRecord.playerId)}, Week ${A.bestPlayerRecord.week}` : null,
+                  note: A.bestPlayerRecord ? asOf(A.bestPlayerRecord.owner?.user_id, A.bestPlayerRecord.season) : null,
+                },
+              ];
+              return cards.map((c, i) => (
+                <SuperlativeCard
+                  key={c.label}
+                  accent={SUPERLATIVE_ACCENTS[i % SUPERLATIVE_ACCENTS.length]}
+                  label={c.label}
+                  value={c.value}
+                  user={c.user}
+                  sublabel={c.sub}
+                  note={c.note}
+                />
+              ));
+            })()}
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -5876,19 +6399,24 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
 
 const SUPERLATIVE_ACCENTS = ["#FF6B00", "#0E4D33", "#B8860B", "#7B4B27", "#3F7A63", "#C1490A", "#5A371C", "#D9560A"];
 
-function SuperlativeCard({ label, value, user, accent, sublabel }) {
+function SuperlativeCard({ label, value, user, accent, sublabel, note }) {
   return (
-    <Card style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", borderLeft: `3px solid ${accent}` }}>
-      <Crest name={user ? teamName(user) : "-"} logo={user ? avatarUrl(user) : null} size={30} />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 11, color: COLORS.muted, textTransform: "uppercase", letterSpacing: "0.04em" }}>{label}</div>
-        <div style={{ fontWeight: 600, fontSize: 13 }}>{sublabel || (user ? withOwner(user) : "Not yet decided")}</div>
-        {sublabel && user ? (
-          <div style={{ fontSize: 11, color: COLORS.muted }}>{withOwner(user)}</div>
-        ) : null}
+    <Card style={{ padding: "11px 14px", borderLeft: `3px solid ${accent}` }}>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10 }}>
+        <div style={{ fontSize: 11, color: COLORS.muted, textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600 }}>
+          {label}
+        </div>
+        <div style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 16, color: accent, whiteSpace: "nowrap" }}>
+          {value}
+        </div>
       </div>
-      <div style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 15, color: accent, whiteSpace: "nowrap", textAlign: "right" }}>
-        {value}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8 }}>
+        <Crest name={user ? teamName(user) : "-"} logo={user ? avatarUrl(user) : null} size={30} />
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontWeight: 600, fontSize: 14, color: COLORS.bone }}>{user ? withOwner(user) : "Not yet decided"}</div>
+          {sublabel && <div style={{ fontSize: 12, color: COLORS.muted, marginTop: 1 }}>{sublabel}</div>}
+          {note && <div style={{ fontSize: 11, color: COLORS.turfLight, fontStyle: "italic", marginTop: 1 }}>{note}</div>}
+        </div>
       </div>
     </Card>
   );
