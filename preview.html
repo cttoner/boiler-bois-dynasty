@@ -222,6 +222,10 @@ textarea:hover, textarea:focus { border-color: #0E4D33; outline: none; }
   .power-key { gap: 6px !important; }
   .power-key > div { padding: 7px 8px !important; }
   .power-blurb { display: none; }
+  .power-key span { font-size: 10px !important; white-space: nowrap; letter-spacing: 0.02em !important; }
+  .power-key span:last-child { font-size: 13px !important; }
+  .power-key > div > div { flex-direction: column; align-items: flex-start !important; gap: 1px !important; }
+  .power-crest { display: none; }
   .this-week-games { grid-template-columns: minmax(0, 1fr) !important; }
   .site-nav { display: none !important; }
   .rail-strip { margin-bottom: 8px; }
@@ -4540,10 +4544,10 @@ function PowerTab({ power, data }) {
             >
               {tied ? `T${rank}` : rank}
             </div>
-            <Crest name={p.name} logo={p.avatar} size={34} />
+            <span className="power-crest"><Crest name={p.name} logo={p.avatar} size={34} /></span>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                <span style={{ fontWeight: 600 }}>{p.displayName}</span>
+                <NameLabel label={p.displayName} style={{ fontWeight: 600 }} />
                 {consist && (
                   <span
                     style={{
