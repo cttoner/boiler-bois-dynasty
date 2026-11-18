@@ -7034,6 +7034,10 @@ function HistoryTab({ rostersById, usersById, standings, seasonHistory, superlat
       waiverMoves: s.waiverMoves || [],
       rosters: s.rosters || [],
       ownerPlayerTotals: s.ownerPlayerTotals || {},
+      // for the Waiver Wire Gem rules (regular-season starter points by week)
+      weekMatchups: s.weekMatchups || {},
+      users: s.users || [],
+      playoffWeekStart: s.playoffWeekStart,
     }));
     const currentTopWeek = superlatives?.currentSeasonSuper?.topWeek;
     const currentHighGame = currentTopWeek
@@ -7050,9 +7054,17 @@ function HistoryTab({ rostersById, usersById, standings, seasonHistory, superlat
       standings: standings || [],
       highGame: currentHighGame,
       bestPlayerGame: superlatives?.currentSeasonSuper?.bestPlayerGame || null,
+      // once the final is played, the waiver wire MVP can be judged the same way
+      ...(done && data ? {
+        weekMatchups: data.weekMatchups || {},
+        users: data.users || [],
+        rosters: data.rosters || [],
+        playoffWeekStart: data.league?.settings?.playoff_week_start,
+        waiverMoves: (data.transactions || []).filter((t) => t.type === "waiver" || t.type === "free_agent"),
+      } : {}),
     };
     return [current, ...historical].sort((a, b) => Number(b.season) - Number(a.season));
-  }, [seasonHistory, currentSeason, standings, superlatives, rostersById, usersById]);
+  }, [seasonHistory, currentSeason, standings, superlatives, rostersById, usersById, data]);
 
   const ownerDirectory = useMemo(() => {
     const map = {};
