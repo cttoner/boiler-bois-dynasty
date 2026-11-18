@@ -7576,7 +7576,11 @@ function recordsBrokenThisSeason(all, before, season) {
     if (!now || !old) return false;
     const setIn = d.seasonOf ? d.seasonOf(now) : now.season;
     return String(setIn) === season && d.better(d.val(now), d.val(old));
-  }).map((d) => ({ ...d, now: all[d.key], old: before[d.key] }));
+  }).map((d) => ({ ...d, now: all[d.key], old: before[d.key] }))
+    // most recent first (a streak counts from the week it reached the record)
+    .map((r, i) => ({ r, i, when: Number(r.seasonOf ? r.seasonOf(r.now) : r.now.season) * 100 + Number(r.key === "longestStreak" ? r.now.endWeek : r.now.week) }))
+    .sort((a, b) => b.when - a.when || a.i - b.i)
+    .map((x) => x.r);
 }
 
 
