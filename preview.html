@@ -4,6 +4,20 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>Boiler Dynasty</title>
+<meta name="description" content="Boiler Dynasty: our 12-team superflex PPR dynasty league. Standings, playoff odds, live scores, power rankings, and every season's history." />
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="Boiler Dynasty" />
+<meta property="og:title" content="Boiler Dynasty 🚂" />
+<meta property="og:description" content="Standings, playoff odds, live scores, power rankings, and every season's history. Boiler up." />
+<meta property="og:url" content="https://cttoner.github.io/boiler-bois-dynasty/" />
+<meta property="og:image" content="https://cttoner.github.io/boiler-bois-dynasty/og-image.png" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta property="og:image:alt" content="Boiler Dynasty: a gold locomotive on a football-field green background" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Boiler Dynasty 🚂" />
+<meta name="twitter:description" content="Standings, playoff odds, live scores, power rankings, and every season's history." />
+<meta name="twitter:image" content="https://cttoner.github.io/boiler-bois-dynasty/og-image.png" />
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png" />
 <link rel="apple-touch-icon" href="apple-touch-icon.png" />
 <link rel="manifest" href="manifest.webmanifest" />
@@ -40,7 +54,7 @@ const PLAYERS_CACHE_MAX_AGE_MS = 12 * 60 * 60 * 1000; // 12 hours
 // if the browser blocks storage, the site just fetches like normal.
 const IDB_NAME = "boilerdynasty";
 const IDB_STORE = "cache";
-const CACHE_VERSION = 2; // bump if the shape of cached data ever changes
+const CACHE_VERSION = 3; // bump if the shape of cached data ever changes
 function idbOpen() {
   return new Promise((resolve, reject) => {
     if (!window.indexedDB) return reject(new Error("no indexedDB"));
@@ -83,6 +97,7 @@ function slimPlayers(raw) {
     out[id] = {
       first_name: p.first_name, last_name: p.last_name, position: p.position, team: p.team,
       injury_status: p.injury_status, birth_date: p.birth_date, age: p.age, college: p.college,
+      years_exp: p.years_exp,
     };
   });
   return out;
@@ -226,6 +241,11 @@ textarea:hover, textarea:focus { border-color: #0E4D33; outline: none; }
   .power-key span:last-child { font-size: 13px !important; }
   .power-key > div > div { flex-direction: column; align-items: flex-start !important; gap: 1px !important; }
   .power-crest { display: none; }
+  .offseason-grid { grid-template-columns: minmax(0, 1fr) !important; }
+  .awards-grid { grid-template-columns: 1fr 1fr !important; gap: 8px !important; }
+  .awards-grid > div { padding: 10px !important; }
+  .award-headline { font-size: 14.5px !important; }
+  .award-detail { font-size: 10.5px !important; }
   .this-week-games { grid-template-columns: minmax(0, 1fr) !important; }
   .site-nav { display: none !important; }
   .rail-strip { margin-bottom: 8px; }
@@ -567,17 +587,19 @@ function useLeagueData(leagueId) {
               j(`${API}/draft/${d.draft_id}/picks`).catch(() => []),
               j(`${API}/draft/${d.draft_id}`).catch(() => null),
             ]);
-            return { picks, slotToRosterId: detail?.slot_to_roster_id || {} };
+            return { picks, slotToRosterId: detail?.slot_to_roster_id || {}, draftType: detail?.settings?.player_type ?? null };
           })
         );
         return picksAndDetail
-          .flatMap(({ picks, slotToRosterId }) =>
+          .flatMap(({ picks, slotToRosterId, draftType }) =>
             (picks || []).map((p) => ({
               round: p.round,
               pickNo: p.pick_no,
               playerId: p.player_id,
               owner: rosterOwner(p.roster_id),
               originalRosterId: slotToRosterId[p.draft_slot] ?? null,
+              draftType,
+              slot: p.draft_slot,
             }))
           )
           .sort((a, b) => a.pickNo - b.pickNo);
@@ -758,17 +780,19 @@ function useLeagueData(leagueId) {
                   j(`${API}/draft/${d.draft_id}/picks`).catch(() => []),
                   j(`${API}/draft/${d.draft_id}`).catch(() => null),
                 ]);
-                return { picks, slotToRosterId: detail?.slot_to_roster_id || {} };
+                return { picks, slotToRosterId: detail?.slot_to_roster_id || {}, draftType: detail?.settings?.player_type ?? null };
               })
             );
             currentDraftPicks = picksAndDetail
-              .flatMap(({ picks, slotToRosterId }) =>
+              .flatMap(({ picks, slotToRosterId, draftType }) =>
                 (picks || []).map((p) => ({
                   round: p.round,
                   pickNo: p.pick_no,
                   playerId: p.player_id,
                   owner: rosterOwnerCurrent(p.roster_id),
                   originalRosterId: slotToRosterId[p.draft_slot] ?? null,
+                  draftType,
+                  slot: p.draft_slot,
                 }))
               )
               .sort((a, b) => a.pickNo - b.pickNo);
@@ -3170,6 +3194,20 @@ function ThisWeek({ data, standings, usersById }) {
 // bump `version` and the Home "what's new" banner shows again for everyone.
 const PATCH_NOTES = [
   {
+    version: "2.1",
+    date: "2026-11-18",
+    title: "Hardware & Hot Chips",
+    blurb: "Season awards, an offseason mode built around the rookie draft, and a proper card when the link gets shared.",
+    sections: [
+      { heading: "New", items: [
+        "Season awards for every finished season: MVP, Rookie of the Year, Waiver Wire Gem, Luckiest and Unluckiest, Heartbreaker, and Beatdown of the Year",
+        "Offseason mode: once the final is played, Home becomes the rookie draft hub with the draft order, who owes the hot chip, every team's draft capital, and the season's awards",
+        "The draft order projects itself with the league's rule (checked against the real 2026 draft) until Sleeper sets the official order",
+        "Paste the link in the group chat and it shows a Boiler Dynasty card instead of a bare URL",
+      ] },
+    ],
+  },
+  {
     version: "2.0",
     date: "2026-11-17",
     title: "Boiler Up",
@@ -3314,6 +3352,316 @@ function WhatsNewBanner() {
         See what's new
       </button>
       <button onClick={dismiss} aria-label="Dismiss" style={{ background: "none", border: "none", color: "rgba(255,255,255,0.7)", fontSize: 18, cursor: "pointer", padding: "0 2px" }}>×</button>
+    </div>
+  );
+}
+
+
+// ---- Season awards ----
+// Built from one season's own data, so every finished season gets them.
+// `season` shape: { season, weekMatchups, rosters, users, standings,
+// playoffWeekStart, waiverMoves, draftPicks }
+function computeSeasonAwards(season, players) {
+  if (!season) return null;
+  const pws = season.playoffWeekStart || 15;
+  const rosters = season.rosters || [];
+  const userById = Object.fromEntries((season.users || []).map((u) => [u.user_id, u]));
+  const ownerOfRoster = (rid) => rosters.find((r) => r.roster_id === rid)?.owner_id;
+  const weeks = Object.keys(season.weekMatchups || {}).map(Number)
+    .filter((w) => w < pws && (season.weekMatchups[w] || []).some((m) => (m.points ?? 0) > 0))
+    .sort((a, b) => a - b);
+  if (!weeks.length) return null;
+
+  const starterPts = {}; // ownerId -> pid -> pts (regular season, starting lineup only)
+  const allPlay = {}, wins = {}, closeLosses = {};
+  let blowout = null;
+  weeks.forEach((w) => {
+    const ms = (season.weekMatchups[w] || []).filter((m) => m.matchup_id != null);
+    ms.forEach((m) => {
+      const oid = ownerOfRoster(m.roster_id);
+      if (!oid) return;
+      (m.starters || []).forEach((pid) => {
+        if (!pid || pid === "0") return;
+        const pts = m.players_points?.[pid] ?? 0;
+        if (!starterPts[oid]) starterPts[oid] = {};
+        starterPts[oid][pid] = (starterPts[oid][pid] || 0) + pts;
+      });
+      const beat = ms.filter((o) => o.roster_id !== m.roster_id && (m.points ?? 0) > (o.points ?? 0)).length;
+      allPlay[oid] = (allPlay[oid] || 0) + (ms.length > 1 ? beat / (ms.length - 1) : 0);
+    });
+    groupByMatchupId(ms).forEach((pair) => {
+      if (pair.length !== 2) return;
+      const [a, b] = pair;
+      const pa = a.points ?? 0, pb = b.points ?? 0;
+      const oa = ownerOfRoster(a.roster_id), ob = ownerOfRoster(b.roster_id);
+      if (!oa || !ob || (!pa && !pb)) return;
+      const [wo, lo, wp, lp] = pa >= pb ? [oa, ob, pa, pb] : [ob, oa, pb, pa];
+      if (pa !== pb) wins[wo] = (wins[wo] || 0) + 1;
+      if (pa !== pb && wp - lp < 5) closeLosses[lo] = (closeLosses[lo] || 0) + 1;
+      if (!blowout || wp - lp > blowout.margin) blowout = { winner: wo, loser: lo, wp, lp, margin: wp - lp, week: w };
+    });
+  });
+
+  const name = (pid) => {
+    const p = players?.[pid];
+    return p ? `${p.first_name || ""} ${p.last_name || ""}`.trim() : pid;
+  };
+  const pos = (pid) => players?.[pid]?.position || "";
+  const team = (oid) => userById[oid];
+
+  let mvp = null;
+  Object.entries(starterPts).forEach(([oid, ps]) => Object.entries(ps).forEach(([pid, pts]) => {
+    if (!mvp || pts > mvp.pts) mvp = { oid, pid, pts };
+  }));
+  // Rookie of the Year: best player taken in that season's rookie draft
+  const rookiePicks = (season.draftPicks || []).filter((d) => d.draftType === 1 && d.playerId);
+  let roy = null;
+  rookiePicks.forEach((d) => {
+    let best = null;
+    Object.entries(starterPts).forEach(([oid, ps]) => {
+      const pts = ps[d.playerId] || 0;
+      if (pts > 0 && (!best || pts > best.pts)) best = { oid, pts };
+    });
+    if (best && (!roy || best.pts > roy.pts)) {
+      const pickInRound = ((d.pickNo - 1) % (rosters.length || 12)) + 1;
+      roy = { ...best, pid: d.playerId, pick: `${d.round}.${String(pickInRound).padStart(2, "0")}` };
+    }
+  });
+  let gem = null;
+  (season.waiverMoves || []).forEach((t) => {
+    if (t.status && t.status !== "complete") return;
+    Object.entries(t.adds || {}).forEach(([pid, rid]) => {
+      const oid = ownerOfRoster(rid);
+      const pts = starterPts[oid]?.[pid] || 0;
+      if (oid && pts > 0 && (!gem || pts > gem.pts)) gem = { oid, pid, pts };
+    });
+  });
+  const luck = Object.keys(allPlay).map((oid) => ({ oid, luck: (wins[oid] || 0) - allPlay[oid], wins: wins[oid] || 0, exp: allPlay[oid] }));
+  luck.sort((a, b) => b.luck - a.luck);
+  const lucky = luck[0], unlucky = luck[luck.length - 1];
+  let heart = null;
+  Object.entries(closeLosses).forEach(([oid, n]) => { if (!heart || n > heart.n) heart = { oid, n }; });
+
+  const awards = [];
+  if (mvp) awards.push({ icon: "🏆", title: "MVP", user: team(mvp.oid), headline: name(mvp.pid), detail: `${pos(mvp.pid)} · ${fmt(mvp.pts)} pts as a starter` });
+  if (roy) awards.push({ icon: "🌱", title: "Rookie of the Year", user: team(roy.oid), headline: name(roy.pid), detail: `Pick ${roy.pick} · ${fmt(roy.pts)} pts as a starter` });
+  if (gem) awards.push({ icon: "💎", title: "Waiver Wire Gem", user: team(gem.oid), headline: name(gem.pid), detail: `${pos(gem.pid)} · ${fmt(gem.pts)} pts as a starter after the pickup` });
+  if (lucky && lucky.luck > 0) awards.push({ icon: "🍀", title: "Luckiest Team", user: team(lucky.oid), headline: `+${fmt(lucky.luck)} wins`, detail: `${lucky.wins} actual wins vs ${fmt(lucky.exp)} expected` });
+  if (unlucky && unlucky.luck < 0) awards.push({ icon: "⛈️", title: "Unluckiest Team", user: team(unlucky.oid), headline: `${fmt(unlucky.luck)} wins`, detail: `${unlucky.wins} actual wins vs ${fmt(unlucky.exp)} expected` });
+  if (heart) awards.push({ icon: "💔", title: "Heartbreaker", user: team(heart.oid), headline: `${heart.n} ${heart.n === 1 ? "loss" : "losses"} by under 5`, detail: "So close, so many times" });
+  if (blowout) awards.push({ icon: "💥", title: "Beatdown of the Year", user: team(blowout.winner), headline: `+${fmt(blowout.margin)}`, detail: `${fmt(blowout.wp)} to ${fmt(blowout.lp)} over ${teamName(team(blowout.loser))}, Week ${blowout.week}` });
+  return awards;
+}
+
+function SeasonAwards({ season, players, title }) {
+  const awards = useMemo(() => computeSeasonAwards(season, players), [season, players]);
+  if (!awards || !awards.length) return null;
+  return (
+    <div style={{ marginTop: 22 }}>
+      <SectionLabel>{title || `${season.season} season awards`}</SectionLabel>
+      <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
+        Handed out automatically from the regular season. Team names are what each manager called their team that year.
+      </div>
+      <div className="awards-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: 10 }}>
+        {awards.map((a) => (
+          <Card key={a.title} style={{ padding: "12px 14px", borderTop: "3px solid #DAAA00", display: "flex", flexDirection: "column", gap: 4 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 18 }}>{a.icon}</span>
+              <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10.5, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: COLORS.goldDim }}>{a.title}</span>
+            </div>
+            <div className="award-headline" style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 17, color: COLORS.turf, lineHeight: 1.15 }}>{a.headline}</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+              {a.user && <Crest name={teamName(a.user)} logo={avatarUrl(a.user)} size={18} />}
+              <span style={{ fontSize: 12.5, fontWeight: 600, color: COLORS.bone, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.user ? teamName(a.user) : "?"}</span>
+            </div>
+            <div className="award-detail" style={{ fontSize: 11.5, color: COLORS.muted }}>{a.detail}</div>
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ---- Offseason mode ----
+// Rookie draft order rule (checked against the real 2026 draft):
+//   non-playoff teams first, worst record first, ties to fewer points;
+//   then playoff teams by how far they got: first-round losers, semifinal
+//   losers, runner-up, champion last. Same round -> better seed picks first.
+function projectRookieOrder({ standings, rosters, bracket, divisions, playoffTeams }) {
+  const seedOf = computeSeeds(standings || [], rosters, divisions > 1 ? divisions : 0);
+  const ids = (standings || []).map((s) => s.rosterId);
+  const playoffIds = ids.filter((id) => seedOf[id] <= playoffTeams);
+  const st = Object.fromEntries((standings || []).map((s) => [s.rosterId, s]));
+  const nonPlayoff = ids.filter((id) => !playoffIds.includes(id))
+    .sort((a, b) => st[a].winPct - st[b].winPct || st[a].fpts - st[b].fpts);
+  const main = (bracket || []).filter((m) => !m.p || m.p === 1);
+  const finalM = main.find((m) => m.p === 1);
+  const done = !!finalM?.w;
+  let playoffOrder = null;
+  if (done) {
+    const exitRound = {};
+    playoffIds.forEach((id) => {
+      const lost = main.filter((m) => m.l === id).map((m) => m.r);
+      exitRound[id] = lost.length ? Math.min(...lost) : Infinity;
+    });
+    playoffOrder = [...playoffIds].sort((a, b) => exitRound[a] - exitRound[b] || seedOf[a] - seedOf[b]);
+  }
+  return { nonPlayoff, playoffIds: [...playoffIds].sort((a, b) => seedOf[b] - seedOf[a]), playoffOrder, seedOf, complete: done };
+}
+
+function useOffseasonForced() {
+  return useMemo(() => {
+    try { return new URLSearchParams(window.location.search).has("offseason"); } catch (e) { return false; }
+  }, []);
+}
+
+function OffseasonHub({ data, standings, usersById, superlatives }) {
+  const { league, rosters, tradedPicks, seasonHistory, players } = data;
+  const settings = league?.settings || {};
+  const finishedCurrent = superlatives?.currentResult;
+  const lastPast = [...(seasonHistory || [])].sort((a, b) => Number(b.season) - Number(a.season))[0];
+  const finished = finishedCurrent
+    ? { season: league.season, weekMatchups: data.weekMatchups, rosters, users: data.users, standings, playoffWeekStart: settings.playoff_week_start,
+        waiverMoves: (data.transactions || []).filter((t) => t.type === "waiver" || t.type === "free_agent"), draftPicks: data.currentDraftPicks, bracket: data.currentBracket }
+    : lastPast || null;
+  const inSeason = data.seasonType === "regular" || data.seasonType === "post";
+  const upcomingSeason = String(Number(league?.season) + (inSeason || finishedCurrent ? 1 : 0));
+
+  const [official, setOfficial] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const list = await fetch(`${API}/league/${league?.league_id || LEAGUE_ID}/drafts`).then((r) => (r.ok ? r.json() : []));
+        const target = (list || []).find((d) => String(d.season) === upcomingSeason && d.status !== "complete");
+        if (!target) return;
+        const det = await fetch(`${API}/draft/${target.draft_id}`).then((r) => (r.ok ? r.json() : null));
+        if (cancelled || !det) return;
+        const slots = det.slot_to_roster_id || {};
+        const order = Object.keys(slots).length
+          ? Object.entries(slots).sort((a, b) => Number(a[0]) - Number(b[0])).map(([, rid]) => rid)
+          : null;
+        setOfficial({ start: det.start_time, order, rounds: det.settings?.rounds });
+      } catch (e) {}
+    })();
+    return () => { cancelled = true; };
+  }, [league, upcomingSeason]);
+
+  const useFinishedBase = !!finishedCurrent || !inSeason;
+  const baseStandings = useFinishedBase ? (finished?.standings || standings) : standings;
+  const baseRosters = useFinishedBase ? (finished?.rosters || rosters) : rosters;
+  const baseBracket = useFinishedBase ? (finished?.bracket || []) : data.currentBracket;
+  const proj = projectRookieOrder({
+    standings: baseStandings, rosters: baseRosters, bracket: baseBracket,
+    divisions: settings.divisions, playoffTeams: settings.playoff_teams || 6,
+  });
+  const order = official?.order || (proj.playoffOrder ? [...proj.nonPlayoff, ...proj.playoffOrder] : null);
+  const rounds = official?.rounds || data.draftRounds || 3;
+
+  const tradeMap = {};
+  (tradedPicks || []).forEach((tp) => { if (String(tp.season) === upcomingSeason) tradeMap[`${tp.round}-${tp.roster_id}`] = tp.owner_id; });
+  const holder = (round, rid) => tradeMap[`${round}-${rid}`] ?? rid;
+  const rosterOwner = (rid) => usersById[(rosters || []).find((r) => r.roster_id === rid)?.owner_id];
+  const teamLabel = (rid) => teamName(rosterOwner(rid));
+
+  const firstPickOriginal = order ? order[0] : proj.nonPlayoff[0];
+  const firstPickHolder = firstPickOriginal != null ? holder(1, firstPickOriginal) : null;
+
+  const countdown = (() => {
+    if (!official?.start) return null;
+    const days = Math.ceil((official.start - Date.now()) / 86400000);
+    if (days < 0) return null;
+    return days === 0 ? "Draft day!" : `${days} ${days === 1 ? "day" : "days"} away`;
+  })();
+  const status = official?.order ? "Official order" : proj.complete || !inSeason ? "Projected order" : "Projected · season in progress";
+
+  const capital = (rosters || []).map((r) => {
+    const picks = [];
+    for (let rd = 1; rd <= rounds; rd++) {
+      (rosters || []).forEach((orig) => {
+        if (holder(rd, orig.roster_id) !== r.roster_id) return;
+        const slot = order ? order.indexOf(orig.roster_id) + 1 : null;
+        picks.push({ rd, slot, via: orig.roster_id !== r.roster_id ? orig.roster_id : null });
+      });
+    }
+    picks.sort((a, b) => a.rd - b.rd || (a.slot || 99) - (b.slot || 99));
+    return { rid: r.roster_id, picks };
+  }).sort((a, b) => {
+    const best = (x) => Math.min(...x.picks.map((p) => (p.rd - 1) * 100 + (p.slot || 50)), 9999);
+    return best(a) - best(b) || b.picks.length - a.picks.length;
+  });
+
+  const Row = ({ n, rid, muted }) => {
+    const h = holder(1, rid);
+    const u = rosterOwner(h);
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "6px 0", borderTop: `1px solid ${COLORS.hairline}`, opacity: muted ? 0.8 : 1 }}>
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, fontWeight: 700, color: n === 1 ? COLORS.pylon : COLORS.turf, width: 36 }}>{n ? `1.${String(n).padStart(2, "0")}` : "1.--"}</span>
+        <Crest name={teamName(u)} logo={avatarUrl(u)} size={20} />
+        <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600, color: COLORS.bone, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {teamName(u)}
+          {h !== rid && <span style={{ fontWeight: 400, color: COLORS.muted }}> (via {teamLabel(rid)})</span>}
+        </span>
+        {n === 1 && <span title="The 1.01 comes with the league punishment" style={{ fontSize: 15 }}>🌶️</span>}
+      </div>
+    );
+  };
+
+  return (
+    <div style={{ marginBottom: 22 }}>
+      <SectionLabel>Offseason · {upcomingSeason} rookie draft</SectionLabel>
+      <div className="offseason-grid" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 12, alignItems: "start" }}>
+        <Card style={{ padding: "6px 14px 10px", borderTop: `3px solid ${COLORS.pylon}` }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0" }}>
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10.5, letterSpacing: "0.08em", color: COLORS.muted }}>ROUND 1 · {status.toUpperCase()}</span>
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, fontWeight: 700, color: COLORS.turf }}>{countdown || "Date TBD"}</span>
+          </div>
+          {firstPickHolder != null && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#FFF3E8", border: `1px solid ${COLORS.pylon}`, borderRadius: 8, padding: "8px 10px", margin: "2px 0 6px" }}>
+              <span style={{ fontSize: 18 }}>🌶️</span>
+              <span style={{ fontSize: 12.5, color: COLORS.bone }}>
+                <b>{teamLabel(firstPickHolder)}</b> {order ? "holds" : "is in line for"} the 1.01 and owes the {LEAGUE_BYLAWS.firstPickPunishment.punishment.toLowerCase()} before it's theirs.
+              </span>
+            </div>
+          )}
+          {order
+            ? order.map((rid, i) => <Row key={rid} n={i + 1} rid={rid} />)
+            : (
+              <>
+                {proj.nonPlayoff.map((rid, i) => <Row key={rid} n={i + 1} rid={rid} />)}
+                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10.5, color: COLORS.muted, padding: "8px 0 2px", borderTop: `1px solid ${COLORS.hairline}` }}>
+                  PICKS {proj.nonPlayoff.length + 1}-{proj.nonPlayoff.length + proj.playoffIds.length} · SET BY PLAYOFF FINISH, CHAMPION PICKS LAST
+                </div>
+                {proj.playoffIds.map((rid) => <Row key={rid} n={0} rid={rid} muted />)}
+              </>
+            )}
+          <div style={{ fontSize: 11, color: COLORS.muted, marginTop: 8 }}>
+            Rounds 2-{rounds} follow the same order. {official?.order ? "Order is official from Sleeper." : "Projected with the league's draft order rule until Sleeper sets the official order."}
+          </div>
+        </Card>
+        <Card style={{ padding: "6px 14px 10px", borderTop: "3px solid #DAAA00" }}>
+          <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10.5, letterSpacing: "0.08em", color: COLORS.muted, padding: "6px 0" }}>DRAFT CAPITAL · {upcomingSeason}</div>
+          {capital.map((c, i) => (
+            <div key={c.rid} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderTop: `1px solid ${COLORS.hairline}` }}>
+              <Crest name={teamLabel(c.rid)} logo={avatarUrl(rosterOwner(c.rid))} size={20} />
+              <span style={{ flex: "0 1 150px", minWidth: 0, fontSize: 12.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{teamLabel(c.rid)}</span>
+              <div style={{ flex: 1, display: "flex", flexWrap: "wrap", gap: 4, justifyContent: "flex-end" }}>
+                {c.picks.length === 0 && <span style={{ fontSize: 11, color: COLORS.muted }}>No picks</span>}
+                {c.picks.map((p, j) => (
+                  <span key={j} title={p.via != null ? `via ${teamLabel(p.via)}` : undefined}
+                    style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10.5, fontWeight: 700, padding: "2px 6px", borderRadius: 4,
+                      background: p.rd === 1 ? COLORS.turfTint : COLORS.surfaceLight, color: p.via != null ? COLORS.goldDim : COLORS.turf,
+                      border: `1px solid ${p.via != null ? "#DAAA00" : "transparent"}` }}>
+                    {p.slot ? `${p.rd}.${String(p.slot).padStart(2, "0")}` : `R${p.rd}`}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ))}
+          <div style={{ fontSize: 11, color: COLORS.muted, marginTop: 6 }}>Gold outline = acquired in a trade (hover to see from whom).</div>
+        </Card>
+      </div>
+      {finished && <SeasonAwards season={finished} players={players} title={`${finished.season} season awards`} />}
     </div>
   );
 }
@@ -6881,6 +7229,20 @@ function HistoryTab({ rostersById, usersById, standings, seasonHistory, superlat
 
       {selectedSummary && data && (() => {
         const past = (seasonHistory || []).find((s) => String(s.season) === String(selectedSummary.season));
+        const isCur = String(selectedSummary.season) === String(currentSeason);
+        const awardSeason = past
+          ? past
+          : isCur && superlatives?.currentResult
+          ? { season: currentSeason, weekMatchups: data.weekMatchups, rosters: data.rosters, users: data.users, standings,
+              playoffWeekStart: data.league?.settings?.playoff_week_start,
+              waiverMoves: (data.transactions || []).filter((t) => t.type === "waiver" || t.type === "free_agent"),
+              draftPicks: data.currentDraftPicks }
+          : null;
+        return awardSeason ? <SeasonAwards season={awardSeason} players={players} /> : null;
+      })()}
+
+      {selectedSummary && data && (() => {
+        const past = (seasonHistory || []).find((s) => String(s.season) === String(selectedSummary.season));
         if (past && past.bracket && past.bracket.length) {
           return <PlayoffBracket data={data} archive={past} />;
         }
@@ -7281,6 +7643,8 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
   // Season-specific spots (banners, podiums, wall of shame) keep the name
   // they had that year.
   const currentUser = (u) => (u && usersById[u.user_id]) || u;
+  const forcedOffseason = useOffseasonForced();
+  const offseasonMode = forcedOffseason || seasonType === "off" || seasonType === "pre" || !!superlatives?.currentResult;
   // An empty banner hangs for the current season until its champion is crowned.
   const showOpenBanner =
     !!league?.season && seasonType !== "off" && !orderedTitles.some((t) => String(t.season) === String(league.season));
@@ -7344,7 +7708,9 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
   return (
     <div>
       <WhatsNewBanner />
-      <ThisWeek data={data} standings={standings} usersById={usersById} />
+      {offseasonMode
+        ? <OffseasonHub data={data} standings={standings} usersById={usersById} superlatives={superlatives} />
+        : <ThisWeek data={data} standings={standings} usersById={usersById} />}
 
       {/* Champions banner strip: rafter banners */}
       {(orderedTitles.length > 0 || showOpenBanner) && (
