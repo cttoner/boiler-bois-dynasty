@@ -39,8 +39,43 @@
 <script type="text/babel" data-type="module">
 const { useEffect, useMemo, useState, useRef } = React;
 
+// Starting point only. Each season Sleeper renews a dynasty league under a
+// brand-new ID, and the site follows that chain forward on its own (see
+// resolveCurrentLeagueId), so this never has to be edited for a new year.
 const LEAGUE_ID = "1312079841918468096";
 const API = "https://api.sleeper.app/v1";
+
+// Find the newest season of this league. Sleeper only links backward
+// (previous_league_id), so look up the managers' leagues for the next
+// season and pick the one whose previous season is ours. Repeats in case
+// more than one renewal has happened. Remembers the answer for 6 hours.
+const LEAGUE_FOLLOW_KEY = "boilerdynasty_current_league_v1";
+async function resolveCurrentLeagueId(startId) {
+  const getJSON = (url) => fetch(url).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(LEAGUE_FOLLOW_KEY) || "null"); } catch (e) {}
+  const fromSaved = saved && saved.base === startId && saved.id;
+  if (fromSaved && Date.now() - (saved.checkedAt || 0) < 6 * 60 * 60 * 1000) return saved.id;
+
+  let id = fromSaved || startId;
+  for (let hop = 0; hop < 5; hop++) {
+    const [league, users] = await Promise.all([getJSON(`${API}/league/${id}`), getJSON(`${API}/league/${id}/users`)]);
+    if (!league || !users || !users.length) break;
+    const nextSeason = Number(league.season) + 1;
+    let next = null;
+    // a few managers at a time; anyone still in the league will have it
+    for (let i = 0; i < users.length && !next; i += 4) {
+      const lists = await Promise.all(
+        users.slice(i, i + 4).map((u) => getJSON(`${API}/user/${u.user_id}/leagues/nfl/${nextSeason}`))
+      );
+      next = lists.flat().find((l) => l && l.previous_league_id === id) || null;
+    }
+    if (!next) break;
+    id = next.league_id;
+  }
+  try { localStorage.setItem(LEAGUE_FOLLOW_KEY, JSON.stringify({ base: startId, id, checkedAt: Date.now() })); } catch (e) {}
+  return id;
+}
 
 // Sleeper's full player database is several MB and barely changes hour to
 // hour, so it's cached in localStorage instead of re-downloaded on every
@@ -243,6 +278,7 @@ textarea:hover, textarea:focus { border-color: #0E4D33; outline: none; }
   .power-crest { display: none; }
   .offseason-grid { grid-template-columns: minmax(0, 1fr) !important; }
   .awards-grid { grid-template-columns: 1fr 1fr !important; gap: 8px !important; }
+  .window-row { grid-template-columns: minmax(0, 1fr) 92px auto !important; gap: 6px !important; padding: 6px 4px !important; }
   .awards-grid > div { padding: 10px !important; }
   .award-headline { font-size: 14.5px !important; }
   .award-detail { font-size: 10.5px !important; }
@@ -376,7 +412,7 @@ function dedupeTransactionsByMinRound(items) {
   return Object.values(map);
 }
 
-function useLeagueData(leagueId) {
+function useLeagueData(baseLeagueId) {
   const [state, setState] = useState({
     loading: true,
     error: null,
@@ -682,6 +718,7 @@ function useLeagueData(leagueId) {
 
     async function run() {
       try {
+        const leagueId = await resolveCurrentLeagueId(baseLeagueId);
         const [league, nflState] = await Promise.all([
           j(`${API}/league/${leagueId}`),
           j(`${API}/state/nfl`),
@@ -690,7 +727,10 @@ function useLeagueData(leagueId) {
         // actually started. During preseason or the true offseason, there's
         // no real fantasy week yet, regardless of what a raw week number
         // might say.
-        const seasonType = nflState.season_type || "regular";
+        // A freshly renewed league (next year's, before the NFL gets there)
+        // is offseason no matter what week the NFL is in.
+        const leagueAhead = Number(league.season) > Number(nflState.season);
+        const seasonType = leagueAhead ? "off" : nflState.season_type || "regular";
         const isActiveSeason = seasonType === "regular" || seasonType === "post";
         const week = isActiveSeason ? Math.max(1, nflState.week || 1) : 1;
 
@@ -834,7 +874,7 @@ function useLeagueData(leagueId) {
     return () => {
       cancelled = true;
     };
-  }, [leagueId]);
+  }, [baseLeagueId]);
 
   // Live scores: while games could be on (Thu/Sat/Sun/Mon, 9am to 1am
   // Eastern) and the page is open, pull this week's matchups every minute.
@@ -851,7 +891,7 @@ function useLeagueData(leagueId) {
     const tick = async () => {
       if (stopped || document.hidden || !inGameWindow()) return;
       try {
-        const res = await fetch(`${API}/league/${leagueId}/matchups/${state.week}`);
+        const res = await fetch(`${API}/league/${state.league?.league_id}/matchups/${state.week}`);
         if (!res.ok) return;
         const fresh = await res.json();
         if (!stopped && Array.isArray(fresh)) {
@@ -863,7 +903,7 @@ function useLeagueData(leagueId) {
     const onVisible = () => { if (!document.hidden) tick(); };
     document.addEventListener("visibilitychange", onVisible);
     return () => { stopped = true; clearInterval(id); document.removeEventListener("visibilitychange", onVisible); };
-  }, [state.loading, state.seasonType, state.week, leagueId]);
+  }, [state.loading, state.seasonType, state.week, state.league]);
 
   return state;
 }
@@ -3194,6 +3234,18 @@ function ThisWeek({ data, standings, usersById }) {
 // bump `version` and the Home "what's new" banner shows again for everyone.
 const PATCH_NOTES = [
   {
+    version: "2.2",
+    date: "2026-11-18",
+    title: "Age Is Just a Number",
+    blurb: "Every team's age and contention window on Rosters, and the site now follows the league into each new season by itself.",
+    sections: [
+      { heading: "New", items: [
+        "Team age & window on Rosters: every starting lineup's average age against points scored, sorted into Win now, Built to last, On the rise, and Crossroads",
+        "When Sleeper renews the league for next season, the site finds the new league and switches over on its own",
+      ] },
+    ],
+  },
+  {
     version: "2.1",
     date: "2026-11-18",
     title: "Hardware & Hot Chips",
@@ -5161,6 +5213,112 @@ function PowerTab({ power, data }) {
   );
 }
 
+// ---- Team age & window (dynasty) ----
+// Ages are exact (from birth date) and only count QB/RB/WR/TE, so kickers
+// and team defenses don't skew anything. "Production" is this season's
+// points for once games are played, otherwise last season's.
+const AGE_POSITIONS = ["QB", "RB", "WR", "TE"];
+function exactAge(p) {
+  if (!p) return null;
+  if (p.birth_date) {
+    const bd = new Date(p.birth_date);
+    if (!isNaN(bd.getTime())) return (Date.now() - bd.getTime()) / (365.2425 * 86400000);
+  }
+  return typeof p.age === "number" ? p.age + 0.5 : null;
+}
+const WINDOWS = {
+  winNow: { label: "Win now", color: "#FF6B00", tint: "#FFF0E3", blurb: "Scoring at the top, built on veterans. The window is open." },
+  builtToLast: { label: "Built to last", color: "#0E4D33", tint: "#E6F0EA", blurb: "Scoring at the top and young. The scary one." },
+  onTheRise: { label: "On the rise", color: "#B58A00", tint: "#FFF3D6", blurb: "Young core, points still coming. Next year's problem." },
+  crossroads: { label: "Crossroads", color: "#5E4A29", tint: "#F3ECDD", blurb: "Older and not scoring like it. Time to pick a lane." },
+};
+function computeTeamWindows({ rosters, players, standings, seasonHistory }) {
+  const avg = (ids) => {
+    const ages = (ids || []).filter((pid) => pid && pid !== "0")
+      .map((pid) => players?.[pid])
+      .filter((p) => p && AGE_POSITIONS.includes(p.position))
+      .map(exactAge).filter((a) => a != null);
+    return ages.length ? { age: ages.reduce((a, b) => a + b, 0) / ages.length, n: ages.length } : null;
+  };
+  const played = (standings || []).some((r) => r.wins + r.losses + r.ties > 0);
+  const last = [...(seasonHistory || [])].sort((a, b) => Number(b.season) - Number(a.season))[0];
+  const prodRows = played ? standings : last?.standings || [];
+  const prodSeason = played ? null : last?.season;
+  const pfOf = (ownerId) => prodRows.find((r) => r.ownerId === ownerId)?.fpts ?? null;
+
+  const rows = (rosters || []).map((r) => ({
+    rosterId: r.roster_id, ownerId: r.owner_id,
+    starters: avg(r.starters), roster: avg(r.players), pf: pfOf(r.owner_id),
+  })).filter((r) => r.starters);
+  if (rows.length < 4) return null;
+  const half = Math.floor(rows.length / 2);
+  const byAge = [...rows].sort((a, b) => b.starters.age - a.starters.age); // oldest first
+  const byPf = [...rows].sort((a, b) => (b.pf ?? -1) - (a.pf ?? -1));
+  rows.forEach((r) => {
+    r.older = byAge.indexOf(r) < half;
+    r.top = byPf.indexOf(r) < half;
+    r.pfRank = byPf.indexOf(r) + 1;
+    r.window = r.top ? (r.older ? "winNow" : "builtToLast") : (r.older ? "crossroads" : "onTheRise");
+  });
+  const leagueAvg = rows.reduce((a, r) => a + r.starters.age, 0) / rows.length;
+  return { rows: rows.sort((a, b) => a.starters.age - b.starters.age), leagueAvg, prodSeason, hasPf: rows.some((r) => r.pf != null) };
+}
+
+function TeamWindows({ rosters, players, standings, seasonHistory, usersById, selectedRosterId, onSelect }) {
+  const w = useMemo(() => computeTeamWindows({ rosters, players, standings, seasonHistory }),
+    [rosters, players, standings, seasonHistory]);
+  if (!w || !w.hasPf) return null;
+  const ages = w.rows.map((r) => r.starters.age);
+  const lo = Math.floor(Math.min(...ages)) - 0.5, hi = Math.ceil(Math.max(...ages)) + 0.5;
+  const pct = (a) => ((a - lo) / (hi - lo)) * 100;
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <SectionLabel>Team age &amp; window</SectionLabel>
+      <Card style={{ padding: "12px 14px" }}>
+        <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
+          Average age of each starting lineup (QB, RB, WR, TE), youngest first, against {w.prodSeason ? `${w.prodSeason} points scored` : "points scored this season"}.
+          League average starter: <b style={{ color: COLORS.bone }}>{fmt(w.leagueAvg, 1)}</b>. Tap a team to open its roster.
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          {w.rows.map((r) => {
+            const u = usersById[r.ownerId];
+            const win = WINDOWS[r.window];
+            const active = r.rosterId === selectedRosterId;
+            return (
+              <button key={r.rosterId} onClick={() => onSelect(r.rosterId)} className="window-row"
+                style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.3fr) minmax(0, 1fr) auto", alignItems: "center", gap: 10,
+                  padding: "6px 8px", borderRadius: 8, border: `1px solid ${active ? COLORS.gold : "transparent"}`,
+                  background: active ? COLORS.yellowTint : "transparent", cursor: "pointer", textAlign: "left", font: "inherit", color: "inherit" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                  <Crest name={teamName(u)} logo={avatarUrl(u)} size={22} />
+                  <span style={{ fontWeight: 600, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{teamName(u)}</span>
+                </div>
+                <div style={{ position: "relative", height: 18 }} title={`Starters ${fmt(r.starters.age, 1)} · whole roster ${r.roster ? fmt(r.roster.age, 1) : "-"} · #${r.pfRank} in points`}>
+                  <div style={{ position: "absolute", top: 8, left: 0, right: 0, height: 2, background: COLORS.hairline }} />
+                  <div style={{ position: "absolute", top: 2, bottom: 2, left: `${pct(w.leagueAvg)}%`, width: 1, background: COLORS.muted, opacity: 0.6 }} />
+                  <div style={{ position: "absolute", top: 3, left: `calc(${pct(r.starters.age)}% - 6px)`, width: 12, height: 12, borderRadius: 6, background: win.color }} />
+                  <div style={{ position: "absolute", top: 1, left: `calc(${pct(r.starters.age)}% + 9px)`, fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", color: COLORS.bone }} className="window-age">{fmt(r.starters.age, 1)}</div>
+                </div>
+                <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 999, color: win.color, background: win.tint, whiteSpace: "nowrap" }}>{win.label}</span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="window-legend" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 6, marginTop: 12, paddingTop: 10, borderTop: `1px solid ${COLORS.hairline}` }}>
+          {Object.values(WINDOWS).map((x) => (
+            <div key={x.label} style={{ fontSize: 11, color: COLORS.muted, lineHeight: 1.35 }}>
+              <b style={{ color: x.color }}>{x.label}</b>: {x.blurb}
+            </div>
+          ))}
+        </div>
+        <div style={{ fontSize: 11, color: COLORS.muted, marginTop: 8 }}>
+          Top half in points with an older-half lineup is Win now; top half and younger is Built to last; bottom half and younger is On the rise; bottom half and older is Crossroads. Lineups are whoever is set to start in Sleeper right now.
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 function RostersTab({ rosters, usersById, players, selectedRosterId, setSelectedRosterId, data, standings, superlatives }) {
   const roster = rosters.find((r) => r.roster_id === selectedRosterId) || rosters[0];
   const owner = usersById[roster?.owner_id];
@@ -5317,6 +5475,8 @@ function RostersTab({ rosters, usersById, players, selectedRosterId, setSelected
       <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
         Every player, every team. This is the actual roster of assets you're betting your season, and your ego, on.
       </div>
+      <TeamWindows rosters={rosters} players={players} standings={standings} seasonHistory={data.seasonHistory}
+        usersById={usersById} selectedRosterId={roster?.roster_id} onSelect={setSelectedRosterId} />
       <select
         className="mobile-only"
         value={roster?.roster_id ?? ""}
@@ -7047,6 +7207,7 @@ function HistoryTab({ rostersById, usersById, standings, seasonHistory, superlat
     const current = {
       season: currentSeason,
       isComplete: !!done,
+      hasGames: (standings || []).some((r) => r.wins + r.losses + r.ties > 0),
       champion: done?.champion || null,
       runnerUp: done?.runnerUp || null,
       third: done?.third || null,
@@ -7131,7 +7292,7 @@ function HistoryTab({ rostersById, usersById, standings, seasonHistory, superlat
               cursor: "pointer",
             }}
           >
-            {s.season}{!s.isComplete ? " (in progress)" : ""}
+            {s.season}{!s.isComplete ? (s.hasGames === false ? " (upcoming)" : " (in progress)") : ""}
           </button>
         ))}
       </div>
