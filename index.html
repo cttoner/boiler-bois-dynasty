@@ -3205,6 +3205,9 @@ const PATCH_NOTES = [
         "The draft order projects itself with the league's rule (checked against the real 2026 draft) until Sleeper sets the official order",
         "Paste the link in the group chat and it shows a Boiler Dynasty card instead of a bare URL",
       ] },
+      { heading: "Fixed", items: [
+        "Waiver wire MVP in History now only counts in-season pickups and the points scored after them, so startup roster building no longer wins it",
+      ] },
     ],
   },
   {
@@ -3456,7 +3459,7 @@ function computeSeasonAwards(season, players) {
   const awards = [];
   if (mvp) awards.push({ icon: "🏆", title: "MVP", user: team(mvp.oid), headline: name(mvp.pid), detail: `${pos(mvp.pid)} · ${fmt(mvp.pts)} pts as a starter` });
   if (roy) awards.push({ icon: "🌱", title: "Rookie of the Year", user: team(roy.oid), headline: name(roy.pid), detail: `Pick ${roy.pick} · ${fmt(roy.pts)} pts as a starter` });
-  if (gem) awards.push({ icon: "💎", title: "Waiver Wire Gem", user: team(gem.oid), headline: name(gem.pid), detail: `${pos(gem.pid)} · picked up Week ${gem.fromWeek} · ${fmt(gem.pts)} pts as a starter after` });
+  if (gem) awards.push({ icon: "💎", title: "Waiver Wire Gem", raw: gem, user: team(gem.oid), headline: name(gem.pid), detail: `${pos(gem.pid)} · picked up Week ${gem.fromWeek} · ${fmt(gem.pts)} pts as a starter after` });
   if (lucky && lucky.luck > 0) awards.push({ icon: "🍀", title: "Luckiest Team", user: team(lucky.oid), headline: `+${fmt(lucky.luck)} wins`, detail: `${lucky.wins} actual wins vs ${fmt(lucky.exp)} expected` });
   if (unlucky && unlucky.luck < 0) awards.push({ icon: "⛈️", title: "Unluckiest Team", user: team(unlucky.oid), headline: `${fmt(unlucky.luck)} wins`, detail: `${unlucky.wins} actual wins vs ${fmt(unlucky.exp)} expected` });
   if (heart) awards.push({ icon: "💔", title: heart.oids.length > 1 ? "Heartbreaker (tie)" : "Heartbreaker", users: heart.oids.map(team), headline: `${heart.n} ${heart.n === 1 ? "loss" : "losses"} by under 5`, detail: "So close, so many times" });
@@ -6766,22 +6769,12 @@ function DraftPicksTab({ rosters, usersById, tradedPicks, draftRounds, currentSe
   );
 }
 
-// Best waiver/free-agent pickup of a season, judged by how many points that
-// player scored while on the roster that added them (ownerPlayerTotals is
-// already ownership-scoped per week, so this naturally only counts the
-// points earned on that specific team).
+// Best waiver/free-agent pickup of a season. Uses the same rules as the
+// Waiver Wire Gem award (in-season pickups after Aug 1, starter points
+// scored after the pickup) so History never shows two different answers.
 function computeSeasonWaiverMVP(summary) {
-  if (!summary.waiverMoves || !summary.rosters) return null;
-  let best = null;
-  summary.waiverMoves.forEach((t) => {
-    Object.entries(t.adds || {}).forEach(([pid, rid]) => {
-      const ownerId = summary.rosters.find((r) => r.roster_id === rid)?.owner_id;
-      if (!ownerId) return;
-      const pts = summary.ownerPlayerTotals?.[ownerId]?.[pid] || 0;
-      if (!best || pts > best.points) best = { playerId: pid, ownerId, points: pts };
-    });
-  });
-  return best;
+  const gem = (computeSeasonAwards(summary, {}) || []).find((a) => a.raw && a.title === "Waiver Wire Gem")?.raw;
+  return gem ? { playerId: gem.pid, ownerId: gem.oid, points: gem.pts, fromWeek: gem.fromWeek } : null;
 }
 
 // Trades plus waiver/free-agent moves combined, one manager's total roster
@@ -6844,7 +6837,7 @@ function buildSeasonHistoryData(summary, players, ownerDirectory) {
 
     const waiverMVP = computeSeasonWaiverMVP(summary);
     if (waiverMVP && waiverMVP.points > 0) {
-      leagueSummaryRows.push(["Waiver wire MVP", `${playerLabelFor(waiverMVP.playerId)}, ${fmt(waiverMVP.points)} pts (${withOwner(ownerDirectory?.[waiverMVP.ownerId])})`]);
+      leagueSummaryRows.push(["Waiver wire MVP", `${playerLabelFor(waiverMVP.playerId)}, ${fmt(waiverMVP.points)} pts as a starter after a Week ${waiverMVP.fromWeek} pickup (${withOwner(ownerDirectory?.[waiverMVP.ownerId])})`]);
     }
 
     const activeManager = computeSeasonMostActiveManager(summary);
