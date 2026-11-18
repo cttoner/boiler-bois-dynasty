@@ -5903,21 +5903,29 @@ function Blurb({ short, style, className, children }) {
   return (
     <div style={style} className={className}>
       {open ? children : short}
-      <button className="m-inline" onClick={() => setOpen(!open)}>{open ? "Less" : "More"}</button>
+      <button className="m-inline" onClick={() => setOpen(!open)}>{open ? "Less ▴" : "More ▾"}</button>
     </div>
   );
 }
 
+// After closing something long, bring its top back on screen so you
+// aren't left scrolled down past it.
+function scrollBackTo(el) {
+  if (!el) return;
+  requestAnimationFrame(() => {
+    if (el.getBoundingClientRect().top < 0) el.scrollIntoView({ block: "start", behavior: "smooth" });
+  });
+}
+
 function MobileCollapse({ children }) {
   const [open, setOpen] = useState(false);
+  const ref = useRef(null);
   return (
-    <div className={open ? "" : "m-clamp"}>
+    <div ref={ref} className={open ? "" : "m-clamp"}>
       <div className="m-clamp-body">{children}</div>
-      {!open && (
-        <button className="mobile-only m-more" onClick={() => setOpen(true)}>
-          Read more
-        </button>
-      )}
+      <button className="mobile-only m-more" onClick={() => { setOpen(!open); if (open) scrollBackTo(ref.current); }}>
+        {open ? "Show less ▴" : "Read more ▾"}
+      </button>
     </div>
   );
 }
@@ -5925,14 +5933,20 @@ function MobileCollapse({ children }) {
 // On phones, tucks a block behind a "Show ..." button. Desktop always shows it.
 function MobileToggle({ label, children }) {
   const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  const closeLabel = label.startsWith("Show ") ? `Hide ${label.slice(5)}` : `Hide: ${label.toLowerCase()}`;
+  const close = () => { setOpen(false); scrollBackTo(ref.current); };
   return (
-    <div className={open ? "" : "m-folded"}>
-      {!open && (
-        <button className="mobile-only m-toggle" onClick={() => setOpen(true)}>
-          {label} ▾
+    <div ref={ref} className={open ? "" : "m-folded"}>
+      <button className="mobile-only m-toggle" onClick={() => (open ? close() : setOpen(true))}>
+        {open ? `${closeLabel} ▴` : `${label} ▾`}
+      </button>
+      <div className="m-fold-body">{children}</div>
+      {open && (
+        <button className="mobile-only m-inline" style={{ padding: "6px 0" }} onClick={close}>
+          {closeLabel} ▴
         </button>
       )}
-      <div className="m-fold-body">{children}</div>
     </div>
   );
 }
@@ -7981,9 +7995,9 @@ function RecordsBroken({ records, season, ownerById, teamNameIn, playerLabel }) 
             );
           })}
         </div>
-        {shown.length < records.length && (
-          <button className="m-inline" style={{ paddingLeft: 0, marginTop: 8 }} onClick={() => setAll(true)}>
-            Show {records.length - shown.length} more ▾
+        {phone && records.length > 2 && (
+          <button className="m-inline" style={{ paddingLeft: 0, marginTop: 8 }} onClick={() => setAll(!all)}>
+            {all ? "Show less ▴" : `Show ${records.length - shown.length} more ▾`}
           </button>
         )}
       </Card>
@@ -8440,9 +8454,10 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
                   sublabel={c.sub}
                   note={c.note}
                 />
-              )), shownCards.length < cards.length && (
-                <button key="more" className="m-toggle" style={{ gridColumn: "1 / -1" }} onClick={() => setAllSupers(true)}>
-                  Show all {cards.length} records ▾
+              )), phone && cards.length > 6 && (
+                <button key="more" className="m-toggle" style={{ gridColumn: "1 / -1" }}
+                  onClick={(e) => { const grid = e.currentTarget.parentElement; setAllSupers(!allSupers); if (allSupers) scrollBackTo(grid); }}>
+                  {allSupers ? "Show fewer records ▴" : `Show all ${cards.length} records ▾`}
                 </button>
               )];
             })()}
