@@ -238,6 +238,9 @@ textarea:hover, textarea:focus { border-color: #0E4D33; outline: none; }
   .m-hide { display: none !important; }
   .mobile-only-inline { display: inline !important; }
   .syn-table th, .syn-table td { padding: 7px 6px !important; }
+  .info-table tr { display: block; padding: 8px 12px; }
+  .info-table td { display: block; width: auto !important; padding: 0 !important; }
+  .info-table td:first-child { font-size: 10.5px !important; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 2px; }
   .sortable-table td.col-team { font-family: 'Inter', sans-serif !important; font-size: 13px; }
   .sortable-table .col-rank { display: none; }
   .sortable-table .col-team .name-label { display: inline-block; max-width: 118px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
@@ -8539,7 +8542,7 @@ function InfoTable({ title, rows, note, accent }) {
     <div>
       <SectionLabel>{title}</SectionLabel>
       <Card style={{ padding: 0, overflow: "hidden", borderLeft: accent ? `3px solid ${accent}` : undefined }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
+        <table className="info-table" style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
           <tbody>
             {rows.map(([label, value], i) => (
               <tr key={label} style={{ borderTop: i === 0 ? "none" : `1px solid ${COLORS.hairline}` }}>
