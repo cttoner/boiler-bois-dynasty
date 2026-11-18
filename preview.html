@@ -3373,6 +3373,7 @@ function computeSeasonAwards(season, players) {
   if (!weeks.length) return null;
 
   const starterPts = {}; // ownerId -> pid -> pts (regular season, starting lineup only)
+  const starterWeekPts = {}; // ownerId -> pid -> week -> pts
   const allPlay = {}, wins = {}, closeLosses = {};
   let blowout = null;
   weeks.forEach((w) => {
@@ -3385,6 +3386,9 @@ function computeSeasonAwards(season, players) {
         const pts = m.players_points?.[pid] ?? 0;
         if (!starterPts[oid]) starterPts[oid] = {};
         starterPts[oid][pid] = (starterPts[oid][pid] || 0) + pts;
+        if (!starterWeekPts[oid]) starterWeekPts[oid] = {};
+        if (!starterWeekPts[oid][pid]) starterWeekPts[oid][pid] = {};
+        starterWeekPts[oid][pid][w] = pts;
       });
       const beat = ms.filter((o) => o.roster_id !== m.roster_id && (m.points ?? 0) > (o.points ?? 0)).length;
       allPlay[oid] = (allPlay[oid] || 0) + (ms.length > 1 ? beat / (ms.length - 1) : 0);
@@ -3427,28 +3431,35 @@ function computeSeasonAwards(season, players) {
       roy = { ...best, pid: d.playerId, pick: `${d.round}.${String(pickInRound).padStart(2, "0")}` };
     }
   });
+  // Waiver Wire Gem: in-season pickups only (after Aug 1, so offseason
+  // roster building doesn't count), and only points scored after the pickup.
+  const cutoff = new Date(`${season.season}-08-01T00:00:00`).getTime();
   let gem = null;
   (season.waiverMoves || []).forEach((t) => {
     if (t.status && t.status !== "complete") return;
+    if (t.created && t.created < cutoff) return;
+    const fromWeek = t.leg || 1;
     Object.entries(t.adds || {}).forEach(([pid, rid]) => {
       const oid = ownerOfRoster(rid);
-      const pts = starterPts[oid]?.[pid] || 0;
-      if (oid && pts > 0 && (!gem || pts > gem.pts)) gem = { oid, pid, pts };
+      const byWeek = starterWeekPts[oid]?.[pid] || {};
+      const pts = Object.entries(byWeek).filter(([w]) => Number(w) >= fromWeek).reduce((a, [, v]) => a + v, 0);
+      if (oid && pts > 0 && (!gem || pts > gem.pts)) gem = { oid, pid, pts, fromWeek };
     });
   });
   const luck = Object.keys(allPlay).map((oid) => ({ oid, luck: (wins[oid] || 0) - allPlay[oid], wins: wins[oid] || 0, exp: allPlay[oid] }));
   luck.sort((a, b) => b.luck - a.luck);
   const lucky = luck[0], unlucky = luck[luck.length - 1];
-  let heart = null;
-  Object.entries(closeLosses).forEach(([oid, n]) => { if (!heart || n > heart.n) heart = { oid, n }; });
+  // Heartbreaker: ties share the award
+  const maxClose = Math.max(0, ...Object.values(closeLosses));
+  const heart = maxClose > 0 ? { n: maxClose, oids: Object.keys(closeLosses).filter((oid) => closeLosses[oid] === maxClose) } : null;
 
   const awards = [];
   if (mvp) awards.push({ icon: "🏆", title: "MVP", user: team(mvp.oid), headline: name(mvp.pid), detail: `${pos(mvp.pid)} · ${fmt(mvp.pts)} pts as a starter` });
   if (roy) awards.push({ icon: "🌱", title: "Rookie of the Year", user: team(roy.oid), headline: name(roy.pid), detail: `Pick ${roy.pick} · ${fmt(roy.pts)} pts as a starter` });
-  if (gem) awards.push({ icon: "💎", title: "Waiver Wire Gem", user: team(gem.oid), headline: name(gem.pid), detail: `${pos(gem.pid)} · ${fmt(gem.pts)} pts as a starter after the pickup` });
+  if (gem) awards.push({ icon: "💎", title: "Waiver Wire Gem", user: team(gem.oid), headline: name(gem.pid), detail: `${pos(gem.pid)} · picked up Week ${gem.fromWeek} · ${fmt(gem.pts)} pts as a starter after` });
   if (lucky && lucky.luck > 0) awards.push({ icon: "🍀", title: "Luckiest Team", user: team(lucky.oid), headline: `+${fmt(lucky.luck)} wins`, detail: `${lucky.wins} actual wins vs ${fmt(lucky.exp)} expected` });
   if (unlucky && unlucky.luck < 0) awards.push({ icon: "⛈️", title: "Unluckiest Team", user: team(unlucky.oid), headline: `${fmt(unlucky.luck)} wins`, detail: `${unlucky.wins} actual wins vs ${fmt(unlucky.exp)} expected` });
-  if (heart) awards.push({ icon: "💔", title: "Heartbreaker", user: team(heart.oid), headline: `${heart.n} ${heart.n === 1 ? "loss" : "losses"} by under 5`, detail: "So close, so many times" });
+  if (heart) awards.push({ icon: "💔", title: heart.oids.length > 1 ? "Heartbreaker (tie)" : "Heartbreaker", users: heart.oids.map(team), headline: `${heart.n} ${heart.n === 1 ? "loss" : "losses"} by under 5`, detail: "So close, so many times" });
   if (blowout) awards.push({ icon: "💥", title: "Beatdown of the Year", user: team(blowout.winner), headline: `+${fmt(blowout.margin)}`, detail: `${fmt(blowout.wp)} to ${fmt(blowout.lp)} over ${teamName(team(blowout.loser))}, Week ${blowout.week}` });
   return awards;
 }
@@ -3470,10 +3481,12 @@ function SeasonAwards({ season, players, title }) {
               <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10.5, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: COLORS.goldDim }}>{a.title}</span>
             </div>
             <div className="award-headline" style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 17, color: COLORS.turf, lineHeight: 1.15 }}>{a.headline}</div>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
-              {a.user && <Crest name={teamName(a.user)} logo={avatarUrl(a.user)} size={18} />}
-              <span style={{ fontSize: 12.5, fontWeight: 600, color: COLORS.bone, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.user ? teamName(a.user) : "?"}</span>
-            </div>
+            {(a.users || [a.user]).map((u, i) => (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+                {u && <Crest name={teamName(u)} logo={avatarUrl(u)} size={18} />}
+                <span style={{ fontSize: 12.5, fontWeight: 600, color: COLORS.bone, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{u ? teamName(u) : "?"}</span>
+              </div>
+            ))}
             <div className="award-detail" style={{ fontSize: 11.5, color: COLORS.muted }}>{a.detail}</div>
           </Card>
         ))}
