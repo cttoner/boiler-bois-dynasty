@@ -278,7 +278,8 @@ textarea:hover, textarea:focus { border-color: #0E4D33; outline: none; }
   .power-crest { display: none; }
   .offseason-grid { grid-template-columns: minmax(0, 1fr) !important; }
   .awards-grid { grid-template-columns: 1fr 1fr !important; gap: 8px !important; }
-  .window-row { grid-template-columns: minmax(0, 1fr) 92px auto !important; gap: 6px !important; padding: 6px 4px !important; }
+  .window-row { grid-template-columns: minmax(0, 1fr) 96px 88px !important; gap: 6px !important; padding: 6px 4px !important; }
+  .window-row > span { font-size: 10px !important; padding: 3px 6px !important; }
   .awards-grid > div { padding: 10px !important; }
   .award-headline { font-size: 14.5px !important; }
   .award-detail { font-size: 10.5px !important; }
@@ -5286,7 +5287,7 @@ function TeamWindows({ rosters, players, standings, seasonHistory, usersById, se
             const active = r.rosterId === selectedRosterId;
             return (
               <button key={r.rosterId} onClick={() => onSelect(r.rosterId)} className="window-row"
-                style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.3fr) minmax(0, 1fr) auto", alignItems: "center", gap: 10,
+                style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.3fr) minmax(0, 1fr) 104px", alignItems: "center", gap: 10,
                   padding: "6px 8px", borderRadius: 8, border: `1px solid ${active ? COLORS.gold : "transparent"}`,
                   background: active ? COLORS.yellowTint : "transparent", cursor: "pointer", textAlign: "left", font: "inherit", color: "inherit" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
@@ -5297,9 +5298,9 @@ function TeamWindows({ rosters, players, standings, seasonHistory, usersById, se
                   <div style={{ position: "absolute", top: 8, left: 0, right: 0, height: 2, background: COLORS.hairline }} />
                   <div style={{ position: "absolute", top: 2, bottom: 2, left: `${pct(w.leagueAvg)}%`, width: 1, background: COLORS.muted, opacity: 0.6 }} />
                   <div style={{ position: "absolute", top: 3, left: `calc(${pct(r.starters.age)}% - 6px)`, width: 12, height: 12, borderRadius: 6, background: win.color }} />
-                  <div style={{ position: "absolute", top: 1, left: `calc(${pct(r.starters.age)}% + 9px)`, fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", color: COLORS.bone }} className="window-age">{fmt(r.starters.age, 1)}</div>
+                  <div style={{ position: "absolute", top: 1, ...(pct(r.starters.age) > 65 ? { right: `calc(${100 - pct(r.starters.age)}% + 9px)` } : { left: `calc(${pct(r.starters.age)}% + 9px)` }), fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", color: COLORS.bone }} className="window-age">{fmt(r.starters.age, 1)}</div>
                 </div>
-                <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 999, color: win.color, background: win.tint, whiteSpace: "nowrap" }}>{win.label}</span>
+                <span style={{ justifySelf: "end", fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 999, color: win.color, background: win.tint, whiteSpace: "nowrap" }}>{win.label}</span>
               </button>
             );
           })}
