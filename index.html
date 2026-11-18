@@ -211,6 +211,8 @@ textarea:hover, textarea:focus { border-color: #0E4D33; outline: none; }
 .rule-head { all: unset; display: flex; justify-content: space-between; align-items: center; width: 100%; margin-bottom: 6px;
   font-family: 'IBM Plex Mono', monospace; font-size: 12px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: #0E4D33; }
 .home-super-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 10px; }
+.mobile-only-inline { display: none; }
+.m-inline { background: none; border: none; padding: 0 0 0 6px; font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 700; color: #0E4D33; cursor: pointer; white-space: nowrap; }
 @media (max-width: 640px) {
   .mobile-only { display: block !important; }
   .desktop-only { display: none !important; }
@@ -234,6 +236,11 @@ textarea:hover, textarea:focus { border-color: #0E4D33; outline: none; }
   .sortable-table .col-ties, .sortable-table .col-fptsAgainst, .sortable-table .col-streak, .sortable-table .col-luck { display: none; }
   .standings-season .col-winPct { display: none; }
   .m-hide { display: none !important; }
+  .mobile-only-inline { display: inline !important; }
+  .syn-table th, .syn-table td { padding: 7px 6px !important; }
+  .info-table tr { display: block; padding: 8px 12px; }
+  .info-table td { display: block; width: auto !important; padding: 0 !important; }
+  .info-table td:first-child { font-size: 10.5px !important; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 2px; }
   .sortable-table td.col-team { font-family: 'Inter', sans-serif !important; font-size: 13px; }
   .sortable-table .col-rank { display: none; }
   .sortable-table .col-team .name-label { display: inline-block; max-width: 118px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
@@ -2253,10 +2260,10 @@ function StandingsTab({ standings, playoffTeams, data, usersById }) {
       {mode === "season" ? (
         <div>
           <SectionLabel>Current standings</SectionLabel>
-          <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
+          <Blurb short="Tap a column to sort." style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
             Every game counts twice in a dynasty: once for this year's trophy, once for next year's draft slot. Get
             comfortable, this list doesn't lie. Click a column to sort.
-          </div>
+          </Blurb>
           <Card style={{ padding: 0, overflow: "hidden" }}>
             <div style={{ overflowX: "auto" }}>
               <div className="standings-season">
@@ -2265,14 +2272,14 @@ function StandingsTab({ standings, playoffTeams, data, usersById }) {
             </div>
           </Card>
           {playoffTeams ? (
-            <div style={{ fontSize: 11, color: COLORS.muted, marginTop: 8 }}>
+            <Blurb short={<><span style={{ display: "inline-block", width: 10, height: 10, background: COLORS.turfTint, border: `1px solid ${COLORS.turf}`, borderRadius: 2, marginRight: 6, verticalAlign: "middle" }} />Shaded = playoff spot today.</>} style={{ fontSize: 11, color: COLORS.muted, marginTop: 8 }}>
               <span style={{ display: "inline-block", width: 10, height: 10, background: COLORS.turfTint, border: `1px solid ${COLORS.turf}`, borderRadius: 2, marginRight: 6, verticalAlign: "middle" }} />
               {divisionCount
                 ? `Currently in playoff position (top ${playoffTeams} seeds). Each division's leader takes a top-${divisionCount} seed${byeCount === divisionCount ? " and a bye" : ""}, then the best remaining records fill in. D1 and D2 mark each team's division.`
                 : `Currently in playoff position (top ${playoffTeams}).`}{" "}
               This stays tied to actual seeding even if you sort by another column. Luck compares actual wins to how many teams you'd have beaten each week if everyone
               played everyone, positive means your record is running ahead of your points, negative means it's not.
-            </div>
+            </Blurb>
           ) : null}
           <PlayoffOdds data={data} />
           {data.week < (data.league?.settings?.playoff_week_start || 15) && (
@@ -2292,10 +2299,10 @@ function StandingsTab({ standings, playoffTeams, data, usersById }) {
           </Card>
 
           <SectionLabel>Head-to-head</SectionLabel>
-          <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
+          <Blurb short="Each row manager's all-time record against each column manager." style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
             Each cell is the row manager's all-time record against the column manager. Gold means they own that
             matchup and know it. Gray means it might be time to quietly retire that rivalry.
-          </div>
+          </Blurb>
           <Card style={{ padding: 8, overflowX: "auto" }}>
             <table style={{ borderCollapse: "collapse" }}>
               <thead>
@@ -2486,9 +2493,9 @@ function MatchupsTab({ matchups, rostersById, usersById, week, seasonType, liveU
   return (
     <div>
       <SectionLabel>Week {week} Matchups</SectionLabel>
-      <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
+      <Blurb short={false} style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
         Head to head, winner takes the bragging rights and the loser takes the group chat abuse. That's the deal.
-      </div>
+      </Blurb>
       {liveUpdatedAt && !notStarted && (
         <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: COLORS.turf, marginBottom: 8 }}>
           <span style={{ display: "inline-block", width: 7, height: 7, borderRadius: "50%", background: COLORS.pylon, marginRight: 6 }} />
@@ -2534,7 +2541,7 @@ function MatchupRow({ name, label, logo, score, leading, record }) {
       <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
         <Crest name={name} logo={logo} size={28} />
         <span style={{ fontWeight: leading || record ? 700 : 500, color: leading || record ? COLORS.bone : COLORS.muted }}>
-          {label}
+          <NameLabel label={label} />
         </span>
       </div>
       <span
@@ -2730,14 +2737,14 @@ function PlayoffOdds({ data }) {
   return (
     <div style={{ marginTop: 22 }}>
       <SectionLabel>Playoff odds</SectionLabel>
-      <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
+      <Blurb short={`${weeksLeft} ${weeksLeft === 1 ? "week" : "weeks"} left · ${SIM_RUNS.toLocaleString()} simulated seasons.`} style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
         {weeksLeft} {weeksLeft === 1 ? "week" : "weeks"} left (Weeks {remainingWeeks[0]}{weeksLeft > 1 ? `-${remainingWeeks[weeksLeft - 1]}` : ""}) and{" "}
         {SIM_RUNS.toLocaleString()} simulated seasons using every team's real schedule and how they've actually scored.{" "}
         {divisionCount
           ? `Division winners take the top ${divisionCount} seeds${byes === divisionCount ? " and the byes" : ""}, then the best remaining records fill out the top ${playoffTeams}. Ties go to points for. `
           : `Top ${playoffTeams} make it${byes ? `, top ${byes} get the bye` : ""}. `}
         Math doesn't care about your feelings.
-      </div>
+      </Blurb>
       {error ? (
         <Card><div style={{ color: COLORS.muted }}>Couldn't load the remaining schedule from Sleeper. Refresh to try again.</div></Card>
       ) : !results ? (
@@ -2795,10 +2802,10 @@ function PlayoffOdds({ data }) {
           </div>
         </Card>
       )}
-      <div style={{ fontSize: 11, color: COLORS.muted, marginTop: 8 }}>
+      <Blurb short="Lock and Out mean every simulation agreed." style={{ fontSize: 11, color: COLORS.muted, marginTop: 8 }}>
         "Lock" and "Out" mean it happened in every simulation, not that it's mathematically official. Projected wins
         include current wins. Odds refresh every time the page loads, so they'll move a point or two run to run.
-      </div>
+      </Blurb>
     </div>
   );
 }
@@ -2940,13 +2947,13 @@ function PlayoffBracket({ data, standings, usersById, archive }) {
   return (
     <div style={{ marginTop: 22 }}>
       <SectionLabel>{archive ? `${seasonLabel} playoff bracket` : "Playoff bracket"}</SectionLabel>
-      <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
+      <Blurb short={archive ? "Every playoff score, with that year's team names." : started ? "Live from Sleeper." : `If the season ended today. Locks in Week ${playoffStart}.`} style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
         {archive
           ? "How it played out, with every playoff score. Team names are what each manager called their team that year."
           : started
           ? "Straight from Sleeper. Scores update as the playoff weeks play out."
           : "If the season ended today. Sleeper keeps this filled in from the current standings until Week " + playoffStart + " locks it in."}
-      </div>
+      </Blurb>
       {champUser && (
         <div style={{ display: "flex", alignItems: "center", gap: 10, background: "#0E4D33", border: "2px solid #DAAA00", borderRadius: 10, padding: "10px 14px", marginBottom: 12, color: "#FFFFFF" }}>
           <span style={{ fontSize: 20 }}>🏆</span>
@@ -3067,9 +3074,9 @@ function SeasonDrafts({ season, leagueId, seasonUsers, seasonRosters, data }) {
   return (
     <div style={{ marginTop: 22 }}>
       <SectionLabel>{season} drafts</SectionLabel>
-      <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
+      <Blurb short="Every pick and where that player is now." style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
         Every pick, who made it, and where that player is now. Draft classes only get more fun to look back on.
-      </div>
+      </Blurb>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
         {drafts.map((d, i) => (
           <button key={d.id} onClick={() => { setActive(i); setRound(1); }} style={chip(i === active)}>
@@ -3235,6 +3242,19 @@ function ThisWeek({ data, standings, usersById }) {
 // Newest first. Add a new entry at the top whenever the site changes;
 // bump `version` and the Home "what's new" banner shows again for everyone.
 const PATCH_NOTES = [
+  {
+    version: "2.4",
+    date: "2026-11-18",
+    title: "Pocket Edition",
+    blurb: "A tighter site on phones: shorter text, with More for the full explanation.",
+    sections: [
+      { heading: "Phones", items: [
+        "Explanations and intros are one line on phones, with More to read the whole thing. Desktop is unchanged",
+        "Record broken shows the two newest, and all-time records show six, each with a button for the rest",
+        "Cleaner matchups and scoreboard (team names only), a slimmer History table, and an easier-to-read League Summary",
+      ] },
+    ],
+  },
   {
     version: "2.3",
     date: "2026-11-18",
@@ -3418,10 +3438,10 @@ function WhatsNewBanner() {
     <div style={{ display: "flex", alignItems: "center", gap: 10, background: "#0E4D33", border: "1px solid #DAAA00", borderRadius: 10, padding: "10px 12px", marginBottom: 16, color: "#FFFFFF" }}>
       <span style={{ fontSize: 18 }}>🚂</span>
       <div style={{ flex: 1, minWidth: 0, fontSize: 13 }}>
-        <b style={{ color: "#DAAA00" }}>v{latest.version} {latest.title}</b> is here. {latest.blurb}
+        <b style={{ color: "#DAAA00" }}>v{latest.version} {latest.title}</b> is here.<span className="m-hide"> {latest.blurb}</span>
       </div>
       <button onClick={() => { openPatchNotes(); dismiss(); }} style={{ background: "#DAAA00", color: "#000000", border: "none", borderRadius: 999, padding: "6px 12px", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
-        See what's new
+        <span className="m-hide">See what's new</span><span className="mobile-only-inline">What's new</span>
       </button>
       <button onClick={dismiss} aria-label="Dismiss" style={{ background: "none", border: "none", color: "rgba(255,255,255,0.7)", fontSize: 18, cursor: "pointer", padding: "0 2px" }}>×</button>
     </div>
@@ -3542,9 +3562,9 @@ function SeasonAwards({ season, players, title }) {
   return (
     <div style={{ marginTop: 22 }}>
       <SectionLabel>{title || `${season.season} season awards`}</SectionLabel>
-      <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
+      <Blurb short="Regular season only, with that year's team names." style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
         Handed out automatically from the regular season. Team names are what each manager called their team that year.
-      </div>
+      </Blurb>
       <div className="awards-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: 10 }}>
         {awards.map((a) => (
           <Card key={a.title} style={{ padding: "12px 14px", borderTop: "3px solid #DAAA00", display: "flex", flexDirection: "column", gap: 4 }}>
@@ -3723,9 +3743,9 @@ function OffseasonHub({ data, standings, usersById, superlatives }) {
                 {proj.playoffIds.map((rid) => <Row key={rid} n={0} rid={rid} muted />)}
               </>
             )}
-          <div style={{ fontSize: 11, color: COLORS.muted, marginTop: 8 }}>
+          <Blurb short={`Rounds 2-${rounds} follow the same order.`} style={{ fontSize: 11, color: COLORS.muted, marginTop: 8 }}>
             Rounds 2-{rounds} follow the same order. {official?.order ? "Order is official from Sleeper." : "Projected with the league's draft order rule until Sleeper sets the official order."}
-          </div>
+          </Blurb>
         </Card>
         <Card style={{ padding: "6px 14px 10px", borderTop: "3px solid #DAAA00" }}>
           <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10.5, letterSpacing: "0.08em", color: COLORS.muted, padding: "6px 0" }}>DRAFT CAPITAL · {upcomingSeason}</div>
@@ -3746,9 +3766,9 @@ function OffseasonHub({ data, standings, usersById, superlatives }) {
               </div>
             </div>
           ))}
-          <div style={{ fontSize: 11, color: COLORS.muted, marginTop: 6 }}>
+          <Blurb short="1.04 = Round 1, Pick 4. Gold outline = traded." style={{ fontSize: 11, color: COLORS.muted, marginTop: 6 }}>
             1.04 = Round 1, Pick 4.{!order && " Playoff teams' picks show as R1, R2 until their finish sets the order."} Gold outline = acquired in a trade (hover to see from whom).
-          </div>
+          </Blurb>
         </Card>
       </div>
       {finished && <SeasonAwards season={finished} players={players} title={`${finished.season} season awards`} />}
@@ -5095,7 +5115,7 @@ function PowerTab({ power, data }) {
     <div>
       <SectionLabel>Power Rankings</SectionLabel>
       <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
-        Not the standings. Your record can lie, this can't. This is who's actually playing good football right now.
+        <span className="m-hide">Not the standings. Your record can lie, this can't. This is who's actually playing good football right now.</span>
         <div className="power-key" style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8, marginTop: 10, marginBottom: 4 }}>
           {POWER_PARTS.map((part) => (
             <div key={part.key} style={{ background: COLORS.surface, border: `1px solid ${COLORS.hairline}`, borderTop: `3px solid ${part.color}`, borderRadius: 8, padding: "8px 10px" }}>
@@ -5219,13 +5239,13 @@ function PowerTab({ power, data }) {
           );
         })}
       </Card>
-      <div style={{ marginTop: 10, fontSize: 12, color: COLORS.muted }}>
+      <Blurb short="Out of 100: all-play 50, record 25, recent form 25. T = tied." style={{ marginTop: 10, fontSize: 12, color: COLORS.muted }}>
         Score is out of 100: all-play is worth up to 50, record and recent form up to 25 each. Hover a bar segment for its exact points.
         Teams showing the same score share the rank (T = tied).
         Movement (▲▼) compares to where each team stood before last week's games, using the same formula.
         Steady/Boom-Bust compares how much a team's weekly score swings around its own average, relative to the rest
         of the league (needs 3+ completed weeks to show up).
-      </div>
+      </Blurb>
     </div>
   );
 }
@@ -5292,10 +5312,10 @@ function TeamWindows({ rosters, players, standings, seasonHistory, usersById, se
     <div style={{ marginBottom: 16 }}>
       <SectionLabel>Team age &amp; window</SectionLabel>
       <Card style={{ padding: "12px 14px" }}>
-        <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
+        <Blurb short="Starting lineup age (QB, RB, WR, TE) against points. Tap a team to open it." style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
           Average age of each starting lineup (QB, RB, WR, TE), youngest first, against {w.prodSeason ? `${w.prodSeason} points scored` : "points scored this season"}.
           League average starter: <b style={{ color: COLORS.bone }}>{fmt(w.leagueAvg, 1)}</b>. Tap a team to open its roster.
-        </div>
+        </Blurb>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           {w.rows.map((r) => {
             const u = usersById[r.ownerId];
@@ -5321,6 +5341,7 @@ function TeamWindows({ rosters, players, standings, seasonHistory, usersById, se
             );
           })}
         </div>
+        <MobileToggle label="What the labels mean">
         <div className="window-legend" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 6, marginTop: 12, paddingTop: 10, borderTop: `1px solid ${COLORS.hairline}` }}>
           {Object.values(WINDOWS).map((x) => (
             <div key={x.label} style={{ fontSize: 11, color: COLORS.muted, lineHeight: 1.35 }}>
@@ -5331,6 +5352,7 @@ function TeamWindows({ rosters, players, standings, seasonHistory, usersById, se
         <div style={{ fontSize: 11, color: COLORS.muted, marginTop: 8 }}>
           Top half in points with an older-half lineup is Win now; top half and younger is Built to last; bottom half and younger is On the rise; bottom half and older is Crossroads. Lineups are whoever is set to start in Sleeper right now.
         </div>
+        </MobileToggle>
       </Card>
     </div>
   );
@@ -5491,9 +5513,9 @@ function RostersTab({ rosters, usersById, players, selectedRosterId, setSelected
   return (
     <div>
       <SectionLabel>Rosters</SectionLabel>
-      <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
+      <Blurb short={false} style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
         Every player, every team. This is the actual roster of assets you're betting your season, and your ego, on.
-      </div>
+      </Blurb>
       <TeamWindows rosters={rosters} players={players} standings={standings} seasonHistory={data.seasonHistory}
         usersById={usersById} selectedRosterId={roster?.roster_id} onSelect={setSelectedRosterId} />
       <select
@@ -5616,10 +5638,10 @@ function RostersTab({ rosters, usersById, players, selectedRosterId, setSelected
           <SectionLabel>Lineup IQ</SectionLabel>
           {lineupIQ && lineupIQ.byWeek.length > 0 ? (
             <>
-              <div style={{ fontSize: 11, color: COLORS.muted, marginBottom: 10 }}>
+              <Blurb short="Your lineup against the best possible lineup each week." style={{ fontSize: 11, color: COLORS.muted, marginBottom: 10 }}>
                 Actual points started versus the best lineup humanly possible that week. Points "left on the bench"
                 are the wins you cost yourself by not doing your homework.
-              </div>
+              </Blurb>
               <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
                 <div style={{ flex: "1 1 200px", minWidth: 180 }}>
                   <StatRow label="Actual points started" value={fmt(lineupIQ.totalActual)} accent={COLORS.turf} />
@@ -5719,10 +5741,10 @@ function RostersTab({ rosters, usersById, players, selectedRosterId, setSelected
           {topByPosition.length > 0 && (
             <>
               <SectionLabel>Position leaders (all time)</SectionLabel>
-              <div style={{ fontSize: 11, color: COLORS.muted, marginBottom: 10 }}>
+              <Blurb short="Most points for this team at each position, all time." style={{ fontSize: 11, color: COLORS.muted, marginBottom: 10 }}>
                 Most points ever scored specifically while on this team, at each position. Includes players who
                 are long gone, whether they got traded away or unceremoniously cut.
-              </div>
+              </Blurb>
               <Card style={{ padding: 0, overflow: "hidden" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <tbody>
@@ -5870,6 +5892,22 @@ function NameLabel({ label, style }) {
 
 // Long reading (intro, recaps) shows a few lines on phones with "Read more".
 // Desktop always shows everything.
+// Explanations and intros: full text on desktop. On phones, a short version
+// with "More" for the full text, or nothing at all for pure flavor text
+// (short={false}).
+function Blurb({ short, style, className, children }) {
+  const phone = useIsPhone();
+  const [open, setOpen] = useState(false);
+  if (!phone) return <div style={style} className={className}>{children}</div>;
+  if (short === false) return null;
+  return (
+    <div style={style} className={className}>
+      {open ? children : short}
+      <button className="m-inline" onClick={() => setOpen(!open)}>{open ? "Less" : "More"}</button>
+    </div>
+  );
+}
+
 function MobileCollapse({ children }) {
   const [open, setOpen] = useState(false);
   return (
@@ -6156,12 +6194,12 @@ function TradesTab({ transactions, rostersById, usersById, players, seasonHistor
   return (
     <div>
       <SectionLabel>Trade History</SectionLabel>
-      <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
+      <Blurb short="Every trade, with points scored since the deal." style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
         Every deal, for better or worse, across every linked season. Someone's going to bring this up drunk at a
         tailgate in three years. Every trade shows points scored since the deal happened, and it keeps running for
         as long as that player actually stays on the team that acquired them, even across a season boundary. The
         moment they get traded again or dropped, it stops right there.
-      </div>
+      </Blurb>
       {!isActiveSeason && (
         <div style={{ fontSize: 12, color: COLORS.gold, marginBottom: 10 }}>
           {seasonType === "pre"
@@ -6495,14 +6533,14 @@ function WaiverWireSection({ transactions, rostersById, usersById, players, isAc
 
   return (
     <div>
-      <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 14 }}>
+      <Blurb short="Every waiver and free-agent pickup." style={{ fontSize: 12, color: COLORS.muted, marginBottom: 14 }}>
         Every waiver claim and free-agent pickup, across every linked season. FAAB shown when the league uses it.
         {!isActiveSeason && (
           <span style={{ color: COLORS.gold }}>
             {" "}{seasonType === "pre" ? "Preseason moves shown here are early roster building, not real waiver runs yet." : ""}
           </span>
         )}
-      </div>
+      </Blurb>
 
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
         <SectionLabel>Most active on waivers</SectionLabel>
@@ -6758,10 +6796,10 @@ function DraftPicksTab({ rosters, usersById, tradedPicks, draftRounds, currentSe
   return (
     <div>
       <SectionLabel>Draft picks</SectionLabel>
-      <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
+      <Blurb short={'Next two classes. "via" = acquired in a trade.'} style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
         Every team's draft capital for the next two classes. This is the future you're trading away, so look before
         you deal it. Picks marked "via" were acquired in a trade, and the rest are still with their original owner.
-      </div>
+      </Blurb>
 
       <div style={{ display: "flex", gap: 4, marginBottom: 12 }}>
         {[["byTeam", "By team"], ["board", "Full board"], ["history", "History"]].map(([id, label]) => (
@@ -7291,9 +7329,9 @@ function HistoryTab({ rostersById, usersById, standings, seasonHistory, superlat
   return (
     <div>
       <SectionLabel>History</SectionLabel>
-      <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
+      <Blurb short={false} style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
         Season by season, receipts don't expire. Champions, superlatives, and every team's full stat line, forever.
-      </div>
+      </Blurb>
 
       <div style={{ display: "flex", gap: 4, marginBottom: 12, flexWrap: "wrap" }}>
         {seasonSummaries.map((s, i) => (
@@ -7364,13 +7402,13 @@ function HistoryTab({ rostersById, usersById, standings, seasonHistory, superlat
             <SectionLabel>Team synopsis</SectionLabel>
             <Card style={{ padding: 0, overflow: "hidden" }}>
               <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <table className="syn-table" style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
                     <tr style={{ background: COLORS.surfaceLight }}>
                       {["#", "Team", ...(seedInfo ? ["Seed"] : []), "W", "L", "T", "PF", "PA", "Diff"].map((h, i) => (
                         <th
                           key={h}
-                          className={h === "T" || h === "PA" ? "m-hide" : undefined}
+                          className={h === "T" || h === "PA" || h === "#" || h === "Diff" ? "m-hide" : undefined}
                           style={{
                             textAlign: i <= 1 ? "left" : "right",
                             padding: "7px 12px",
@@ -7389,7 +7427,7 @@ function HistoryTab({ rostersById, usersById, standings, seasonHistory, superlat
                   <tbody>
                     {historyData.teamRows.map((t, i) => (
                       <tr key={t.ownerId || i} style={{ borderTop: i === 0 ? "none" : `1px solid ${COLORS.hairline}` }}>
-                        <td style={{ padding: "7px 12px", fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: COLORS.muted }}>
+                        <td className="m-hide" style={{ padding: "7px 12px", fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: COLORS.muted }}>
                           {t.rank}
                         </td>
                         <td style={{ padding: "7px 12px" }}>
@@ -7417,7 +7455,7 @@ function HistoryTab({ rostersById, usersById, standings, seasonHistory, superlat
                         <td className="m-hide" style={{ padding: "7px 12px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace", fontSize: 13 }}>{t.ties}</td>
                         <td style={{ padding: "7px 12px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: COLORS.gold }}>{fmt(t.fpts)}</td>
                         <td className="m-hide" style={{ padding: "7px 12px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: COLORS.muted }}>{fmt(t.fptsAgainst)}</td>
-                        <td style={{ padding: "7px 12px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: t.diff >= 0 ? COLORS.turf : COLORS.leatherDeep, fontWeight: 600 }}>
+                        <td className="m-hide" style={{ padding: "7px 12px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: t.diff >= 0 ? COLORS.turf : COLORS.leatherDeep, fontWeight: 600 }}>
                           {t.diff >= 0 ? "+" : ""}{fmt(t.diff)}
                         </td>
                       </tr>
@@ -7920,13 +7958,16 @@ function recordLine(d, r, teamNameIn, playerLabel) {
   }
 }
 function RecordsBroken({ records, season, ownerById, teamNameIn, playerLabel }) {
+  const phone = useIsPhone();
+  const [all, setAll] = useState(false);
   if (!records || !records.length) return null;
+  const shown = phone && !all ? records.slice(0, 2) : records;
   return (
     <div style={{ marginBottom: 22 }}>
       <SectionLabel>Record broken · {season}</SectionLabel>
       <Card style={{ padding: "12px 14px", borderLeft: `4px solid ${COLORS.pylon}`, background: "#FFF8F1" }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {records.map((d) => {
+          {shown.map((d) => {
             const holder = ownerById(d.who(d.now));
             return (
               <div key={d.key} style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
@@ -7940,6 +7981,11 @@ function RecordsBroken({ records, season, ownerById, teamNameIn, playerLabel }) 
             );
           })}
         </div>
+        {shown.length < records.length && (
+          <button className="m-inline" style={{ paddingLeft: 0, marginTop: 8 }} onClick={() => setAll(true)}>
+            Show {records.length - shown.length} more ▾
+          </button>
+        )}
       </Card>
     </div>
   );
@@ -7952,6 +7998,8 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
     wallOfShame, historyRows, ownerDirectory, allTimeSuperlatives, mostTitles,
     teamNameIn, gameRecords, newRecords, mostCareerPoints,
   } = superlatives;
+  const phone = useIsPhone();
+  const [allSupers, setAllSupers] = useState(false);
   const ownerById = (id) => (id && (usersById[id] || ownerDirectory[id])) || null;
   // "2025 as Bijan al-Gaib" for a record set in a specific season
   const asOf = (ownerId, season) => {
@@ -8380,7 +8428,8 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
                   note: G.bestPlayer ? asOf(G.bestPlayer.ownerId, G.bestPlayer.season) : null,
                 },
               ];
-              return cards.map((c, i) => (
+              const shownCards = phone && !allSupers ? cards.slice(0, 6) : cards;
+              return [...shownCards.map((c, i) => (
                 <SuperlativeCard
                   key={c.label}
                   accent={SUPERLATIVE_ACCENTS[i % SUPERLATIVE_ACCENTS.length]}
@@ -8391,7 +8440,11 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
                   sublabel={c.sub}
                   note={c.note}
                 />
-              ));
+              )), shownCards.length < cards.length && (
+                <button key="more" className="m-toggle" style={{ gridColumn: "1 / -1" }} onClick={() => setAllSupers(true)}>
+                  Show all {cards.length} records ▾
+                </button>
+              )];
             })()}
           </div>
         </div>
@@ -8410,7 +8463,7 @@ function SuperlativeCard({ label, value, user, accent, sublabel, note, isNew }) 
           {label}
           {isNew && (
             <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 800, color: "#FFFFFF", background: COLORS.pylon, padding: "2px 5px", borderRadius: 4, letterSpacing: "0.05em", verticalAlign: "1px" }}>
-              NEW {isNew}
+              NEW<span className="m-hide"> {isNew}</span>
             </span>
           )}
         </div>
@@ -8502,7 +8555,7 @@ function InfoTable({ title, rows, note, accent }) {
     <div>
       <SectionLabel>{title}</SectionLabel>
       <Card style={{ padding: 0, overflow: "hidden", borderLeft: accent ? `3px solid ${accent}` : undefined }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
+        <table className="info-table" style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
           <tbody>
             {rows.map(([label, value], i) => (
               <tr key={label} style={{ borderTop: i === 0 ? "none" : `1px solid ${COLORS.hairline}` }}>
@@ -8745,9 +8798,9 @@ function RulesTab({ league, data, standings }) {
   return (
     <div>
       <SectionLabel>Rules</SectionLabel>
-      <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
+      <Blurb short="Settings pull live from Sleeper." style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
         Everything that decides who gets paid. Settings pull live from Sleeper, so this page updates itself if anything changes.
-      </div>
+      </Blurb>
 
       <div className="rules-glance" style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 8, marginBottom: 18 }}>
         {glance.map(([k, v]) => (
