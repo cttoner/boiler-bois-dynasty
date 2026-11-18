@@ -3593,7 +3593,10 @@ function OffseasonHub({ data, standings, usersById, superlatives }) {
     for (let rd = 1; rd <= rounds; rd++) {
       (rosters || []).forEach((orig) => {
         if (holder(rd, orig.roster_id) !== r.roster_id) return;
-        const slot = order ? order.indexOf(orig.roster_id) + 1 : null;
+        // pick number when it's known: the full order, or (mid-season) the non-playoff slots
+        const slot = order
+          ? order.indexOf(orig.roster_id) + 1
+          : proj.nonPlayoff.includes(orig.roster_id) ? proj.nonPlayoff.indexOf(orig.roster_id) + 1 : null;
         picks.push({ rd, slot, via: orig.roster_id !== r.roster_id ? orig.roster_id : null });
       });
     }
@@ -3671,7 +3674,9 @@ function OffseasonHub({ data, standings, usersById, superlatives }) {
               </div>
             </div>
           ))}
-          <div style={{ fontSize: 11, color: COLORS.muted, marginTop: 6 }}>Gold outline = acquired in a trade (hover to see from whom).</div>
+          <div style={{ fontSize: 11, color: COLORS.muted, marginTop: 6 }}>
+            1.04 = Round 1, Pick 4.{!order && " Playoff teams' picks show as R1, R2 until their finish sets the order."} Gold outline = acquired in a trade (hover to see from whom).
+          </div>
         </Card>
       </div>
       {finished && <SeasonAwards season={finished} players={players} title={`${finished.season} season awards`} />}
