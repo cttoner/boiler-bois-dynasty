@@ -3346,7 +3346,7 @@ function WhatsNewBanner() {
     <div style={{ display: "flex", alignItems: "center", gap: 10, background: "#0E4D33", border: "1px solid #DAAA00", borderRadius: 10, padding: "10px 12px", marginBottom: 16, color: "#FFFFFF" }}>
       <span style={{ fontSize: 18 }}>🚂</span>
       <div style={{ flex: 1, minWidth: 0, fontSize: 13 }}>
-        <b style={{ color: "#DAAA00" }}>v{latest.version} {latest.title}</b> is here. New look, live playoff bracket, live scores, and more.
+        <b style={{ color: "#DAAA00" }}>v{latest.version} {latest.title}</b> is here. {latest.blurb}
       </div>
       <button onClick={() => { openPatchNotes(); dismiss(); }} style={{ background: "#DAAA00", color: "#000000", border: "none", borderRadius: 999, padding: "6px 12px", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
         See what's new
@@ -3569,7 +3569,7 @@ function OffseasonHub({ data, standings, usersById, superlatives }) {
     divisions: settings.divisions, playoffTeams: settings.playoff_teams || 6,
   });
   const order = official?.order || (proj.playoffOrder ? [...proj.nonPlayoff, ...proj.playoffOrder] : null);
-  const rounds = official?.rounds || data.draftRounds || 3;
+  const rounds = official?.rounds || settings.draft_rounds || data.draftRounds || 3;
 
   const tradeMap = {};
   (tradedPicks || []).forEach((tp) => { if (String(tp.season) === upcomingSeason) tradeMap[`${tp.round}-${tp.roster_id}`] = tp.owner_id; });
