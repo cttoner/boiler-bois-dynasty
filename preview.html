@@ -211,6 +211,7 @@ textarea:hover, textarea:focus { border-color: #0E4D33; outline: none; }
 .rule-head { all: unset; display: flex; justify-content: space-between; align-items: center; width: 100%; margin-bottom: 6px;
   font-family: 'IBM Plex Mono', monospace; font-size: 12px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: #0E4D33; }
 .home-super-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 10px; }
+.mobile-only-inline { display: none; }
 .m-inline { background: none; border: none; padding: 0 0 0 6px; font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 700; color: #0E4D33; cursor: pointer; white-space: nowrap; }
 @media (max-width: 640px) {
   .mobile-only { display: block !important; }
@@ -235,6 +236,8 @@ textarea:hover, textarea:focus { border-color: #0E4D33; outline: none; }
   .sortable-table .col-ties, .sortable-table .col-fptsAgainst, .sortable-table .col-streak, .sortable-table .col-luck { display: none; }
   .standings-season .col-winPct { display: none; }
   .m-hide { display: none !important; }
+  .mobile-only-inline { display: inline !important; }
+  .syn-table th, .syn-table td { padding: 7px 6px !important; }
   .sortable-table td.col-team { font-family: 'Inter', sans-serif !important; font-size: 13px; }
   .sortable-table .col-rank { display: none; }
   .sortable-table .col-team .name-label { display: inline-block; max-width: 118px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
@@ -2266,7 +2269,7 @@ function StandingsTab({ standings, playoffTeams, data, usersById }) {
             </div>
           </Card>
           {playoffTeams ? (
-            <Blurb short={<><span style={{ display: "inline-block", width: 10, height: 10, background: COLORS.turfTint, border: `1px solid ${COLORS.turf}`, borderRadius: 2, marginRight: 6, verticalAlign: "middle" }} />Shaded = playoff spot today. Luck = actual wins minus all-play wins.</>} style={{ fontSize: 11, color: COLORS.muted, marginTop: 8 }}>
+            <Blurb short={<><span style={{ display: "inline-block", width: 10, height: 10, background: COLORS.turfTint, border: `1px solid ${COLORS.turf}`, borderRadius: 2, marginRight: 6, verticalAlign: "middle" }} />Shaded = playoff spot today.</>} style={{ fontSize: 11, color: COLORS.muted, marginTop: 8 }}>
               <span style={{ display: "inline-block", width: 10, height: 10, background: COLORS.turfTint, border: `1px solid ${COLORS.turf}`, borderRadius: 2, marginRight: 6, verticalAlign: "middle" }} />
               {divisionCount
                 ? `Currently in playoff position (top ${playoffTeams} seeds). Each division's leader takes a top-${divisionCount} seed${byeCount === divisionCount ? " and a bye" : ""}, then the best remaining records fill in. D1 and D2 mark each team's division.`
@@ -2535,7 +2538,7 @@ function MatchupRow({ name, label, logo, score, leading, record }) {
       <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
         <Crest name={name} logo={logo} size={28} />
         <span style={{ fontWeight: leading || record ? 700 : 500, color: leading || record ? COLORS.bone : COLORS.muted }}>
-          {label}
+          <NameLabel label={label} />
         </span>
       </div>
       <span
@@ -2941,13 +2944,13 @@ function PlayoffBracket({ data, standings, usersById, archive }) {
   return (
     <div style={{ marginTop: 22 }}>
       <SectionLabel>{archive ? `${seasonLabel} playoff bracket` : "Playoff bracket"}</SectionLabel>
-      <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
+      <Blurb short={archive ? "Every playoff score, with that year's team names." : started ? "Live from Sleeper." : `If the season ended today. Locks in Week ${playoffStart}.`} style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
         {archive
           ? "How it played out, with every playoff score. Team names are what each manager called their team that year."
           : started
           ? "Straight from Sleeper. Scores update as the playoff weeks play out."
           : "If the season ended today. Sleeper keeps this filled in from the current standings until Week " + playoffStart + " locks it in."}
-      </div>
+      </Blurb>
       {champUser && (
         <div style={{ display: "flex", alignItems: "center", gap: 10, background: "#0E4D33", border: "2px solid #DAAA00", borderRadius: 10, padding: "10px 14px", marginBottom: 12, color: "#FFFFFF" }}>
           <span style={{ fontSize: 20 }}>🏆</span>
@@ -3419,10 +3422,10 @@ function WhatsNewBanner() {
     <div style={{ display: "flex", alignItems: "center", gap: 10, background: "#0E4D33", border: "1px solid #DAAA00", borderRadius: 10, padding: "10px 12px", marginBottom: 16, color: "#FFFFFF" }}>
       <span style={{ fontSize: 18 }}>🚂</span>
       <div style={{ flex: 1, minWidth: 0, fontSize: 13 }}>
-        <b style={{ color: "#DAAA00" }}>v{latest.version} {latest.title}</b> is here. {latest.blurb}
+        <b style={{ color: "#DAAA00" }}>v{latest.version} {latest.title}</b> is here.<span className="m-hide"> {latest.blurb}</span>
       </div>
       <button onClick={() => { openPatchNotes(); dismiss(); }} style={{ background: "#DAAA00", color: "#000000", border: "none", borderRadius: 999, padding: "6px 12px", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
-        See what's new
+        <span className="m-hide">See what's new</span><span className="mobile-only-inline">What's new</span>
       </button>
       <button onClick={dismiss} aria-label="Dismiss" style={{ background: "none", border: "none", color: "rgba(255,255,255,0.7)", fontSize: 18, cursor: "pointer", padding: "0 2px" }}>×</button>
     </div>
@@ -5096,7 +5099,7 @@ function PowerTab({ power, data }) {
     <div>
       <SectionLabel>Power Rankings</SectionLabel>
       <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
-        Not the standings. Your record can lie, this can't. This is who's actually playing good football right now.
+        <span className="m-hide">Not the standings. Your record can lie, this can't. This is who's actually playing good football right now.</span>
         <div className="power-key" style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8, marginTop: 10, marginBottom: 4 }}>
           {POWER_PARTS.map((part) => (
             <div key={part.key} style={{ background: COLORS.surface, border: `1px solid ${COLORS.hairline}`, borderTop: `3px solid ${part.color}`, borderRadius: 8, padding: "8px 10px" }}>
@@ -7383,13 +7386,13 @@ function HistoryTab({ rostersById, usersById, standings, seasonHistory, superlat
             <SectionLabel>Team synopsis</SectionLabel>
             <Card style={{ padding: 0, overflow: "hidden" }}>
               <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <table className="syn-table" style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
                     <tr style={{ background: COLORS.surfaceLight }}>
                       {["#", "Team", ...(seedInfo ? ["Seed"] : []), "W", "L", "T", "PF", "PA", "Diff"].map((h, i) => (
                         <th
                           key={h}
-                          className={h === "T" || h === "PA" ? "m-hide" : undefined}
+                          className={h === "T" || h === "PA" || h === "#" || h === "Diff" ? "m-hide" : undefined}
                           style={{
                             textAlign: i <= 1 ? "left" : "right",
                             padding: "7px 12px",
@@ -7408,7 +7411,7 @@ function HistoryTab({ rostersById, usersById, standings, seasonHistory, superlat
                   <tbody>
                     {historyData.teamRows.map((t, i) => (
                       <tr key={t.ownerId || i} style={{ borderTop: i === 0 ? "none" : `1px solid ${COLORS.hairline}` }}>
-                        <td style={{ padding: "7px 12px", fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: COLORS.muted }}>
+                        <td className="m-hide" style={{ padding: "7px 12px", fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: COLORS.muted }}>
                           {t.rank}
                         </td>
                         <td style={{ padding: "7px 12px" }}>
@@ -7436,7 +7439,7 @@ function HistoryTab({ rostersById, usersById, standings, seasonHistory, superlat
                         <td className="m-hide" style={{ padding: "7px 12px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace", fontSize: 13 }}>{t.ties}</td>
                         <td style={{ padding: "7px 12px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: COLORS.gold }}>{fmt(t.fpts)}</td>
                         <td className="m-hide" style={{ padding: "7px 12px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: COLORS.muted }}>{fmt(t.fptsAgainst)}</td>
-                        <td style={{ padding: "7px 12px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: t.diff >= 0 ? COLORS.turf : COLORS.leatherDeep, fontWeight: 600 }}>
+                        <td className="m-hide" style={{ padding: "7px 12px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: t.diff >= 0 ? COLORS.turf : COLORS.leatherDeep, fontWeight: 600 }}>
                           {t.diff >= 0 ? "+" : ""}{fmt(t.diff)}
                         </td>
                       </tr>
@@ -7939,13 +7942,16 @@ function recordLine(d, r, teamNameIn, playerLabel) {
   }
 }
 function RecordsBroken({ records, season, ownerById, teamNameIn, playerLabel }) {
+  const phone = useIsPhone();
+  const [all, setAll] = useState(false);
   if (!records || !records.length) return null;
+  const shown = phone && !all ? records.slice(0, 2) : records;
   return (
     <div style={{ marginBottom: 22 }}>
       <SectionLabel>Record broken · {season}</SectionLabel>
       <Card style={{ padding: "12px 14px", borderLeft: `4px solid ${COLORS.pylon}`, background: "#FFF8F1" }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {records.map((d) => {
+          {shown.map((d) => {
             const holder = ownerById(d.who(d.now));
             return (
               <div key={d.key} style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
@@ -7959,6 +7965,11 @@ function RecordsBroken({ records, season, ownerById, teamNameIn, playerLabel }) 
             );
           })}
         </div>
+        {shown.length < records.length && (
+          <button className="m-inline" style={{ paddingLeft: 0, marginTop: 8 }} onClick={() => setAll(true)}>
+            Show {records.length - shown.length} more ▾
+          </button>
+        )}
       </Card>
     </div>
   );
@@ -7971,6 +7982,8 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
     wallOfShame, historyRows, ownerDirectory, allTimeSuperlatives, mostTitles,
     teamNameIn, gameRecords, newRecords, mostCareerPoints,
   } = superlatives;
+  const phone = useIsPhone();
+  const [allSupers, setAllSupers] = useState(false);
   const ownerById = (id) => (id && (usersById[id] || ownerDirectory[id])) || null;
   // "2025 as Bijan al-Gaib" for a record set in a specific season
   const asOf = (ownerId, season) => {
@@ -8399,7 +8412,8 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
                   note: G.bestPlayer ? asOf(G.bestPlayer.ownerId, G.bestPlayer.season) : null,
                 },
               ];
-              return cards.map((c, i) => (
+              const shownCards = phone && !allSupers ? cards.slice(0, 6) : cards;
+              return [...shownCards.map((c, i) => (
                 <SuperlativeCard
                   key={c.label}
                   accent={SUPERLATIVE_ACCENTS[i % SUPERLATIVE_ACCENTS.length]}
@@ -8410,7 +8424,11 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
                   sublabel={c.sub}
                   note={c.note}
                 />
-              ));
+              )), shownCards.length < cards.length && (
+                <button key="more" className="m-toggle" style={{ gridColumn: "1 / -1" }} onClick={() => setAllSupers(true)}>
+                  Show all {cards.length} records ▾
+                </button>
+              )];
             })()}
           </div>
         </div>
@@ -8429,7 +8447,7 @@ function SuperlativeCard({ label, value, user, accent, sublabel, note, isNew }) 
           {label}
           {isNew && (
             <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 800, color: "#FFFFFF", background: COLORS.pylon, padding: "2px 5px", borderRadius: 4, letterSpacing: "0.05em", verticalAlign: "1px" }}>
-              NEW {isNew}
+              NEW<span className="m-hide"> {isNew}</span>
             </span>
           )}
         </div>
