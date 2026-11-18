@@ -48,7 +48,8 @@ const API = "https://api.sleeper.app/v1";
 // Find the newest season of this league. Sleeper only links backward
 // (previous_league_id), so look up the managers' leagues for the next
 // season and pick the one whose previous season is ours. Repeats in case
-// more than one renewal has happened. Remembers the answer for 6 hours.
+// more than one renewal has happened (2027, 2028, and on). Remembers the
+// answer for 6 hours.
 const LEAGUE_FOLLOW_KEY = "boilerdynasty_current_league_v1";
 async function resolveCurrentLeagueId(startId) {
   const getJSON = (url) => fetch(url).then((r) => (r.ok ? r.json() : null)).catch(() => null);
@@ -58,7 +59,7 @@ async function resolveCurrentLeagueId(startId) {
   if (fromSaved && Date.now() - (saved.checkedAt || 0) < 6 * 60 * 60 * 1000) return saved.id;
 
   let id = fromSaved || startId;
-  for (let hop = 0; hop < 5; hop++) {
+  for (let hop = 0; hop < 40; hop++) {
     const [league, users] = await Promise.all([getJSON(`${API}/league/${id}`), getJSON(`${API}/league/${id}/users`)]);
     if (!league || !users || !users.length) break;
     const nextSeason = Number(league.season) + 1;
@@ -3235,6 +3236,21 @@ function ThisWeek({ data, standings, usersById }) {
 // bump `version` and the Home "what's new" banner shows again for everyone.
 const PATCH_NOTES = [
   {
+    version: "2.3",
+    date: "2026-11-18",
+    title: "Record Breakers",
+    blurb: "Home now calls it out when an all-time record falls, and three new records join the book.",
+    sections: [
+      { heading: "New", items: [
+        "Record broken: when an all-time record falls, Home shows the new mark and who held it before, and that record card gets a NEW tag for the season",
+        "Three new all-time records: most points in a loss, fewest points in a win, and highest playoff score",
+      ] },
+      { heading: "Fixed", items: [
+        "Every game record now comes from one source, so Home, the trophy case, and the callout always agree. Best player game counts starters only",
+      ] },
+    ],
+  },
+  {
     version: "2.2",
     date: "2026-11-18",
     title: "Age Is Just a Number",
@@ -5346,8 +5362,10 @@ function RostersTab({ rosters, usersById, players, selectedRosterId, setSelected
     if (at.bestPPG?.ownerId === ownerId) records.push("Highest career PPG");
     if (at.bestSeason?.ownerId === ownerId) records.push("Best regular season");
     if (at.highestScoringSeason?.ownerId === ownerId) records.push("Highest scoring season");
-    if (at.singleGame?.owner?.user_id === ownerId) records.push("Highest scoring week");
-    if (at.bestPlayerRecord?.owner?.user_id === ownerId) records.push("Single-game record");
+    const g = superlatives.gameRecords || {};
+    if (g.highWeek?.ownerId === ownerId) records.push("Highest scoring week");
+    if (g.highPlayoff?.ownerId === ownerId) records.push("Highest playoff score");
+    if (g.bestPlayer?.ownerId === ownerId) records.push("Single-game record");
 
     return { podium, shameYears, records };
   }, [ownerId, data.seasonHistory, superlatives]);
@@ -7454,11 +7472,119 @@ function HistoryTab({ rostersById, usersById, standings, seasonHistory, superlat
   );
 }
 
+// ---- Record book engine ----
+// seasons: [{ season, weekMatchups, rosters, playoffWeekStart, bracket }]
+// Regular-season records use real head-to-head games (weeks before the
+// playoffs, both teams scored). Highest week and best player game count
+// every game played, playoffs included, starters only for players. The
+// playoff record counts winners-bracket games only (no toilet bowl).
+function computeRecordBook(seasons) {
+  const sorted = [...seasons].filter((s) => s && s.season).sort((a, b) => Number(a.season) - Number(b.season));
+  let blowout = null, closest = null, lowGame = null, longestStreak = null;
+  let highWeek = null, highLoss = null, lowWin = null, highPlayoff = null, bestPlayer = null;
+  const careerPA = {};
+  const streaks = {};
+  sorted.forEach((sz) => {
+    const pws = sz.playoffWeekStart || 15;
+    const ownerOf = (rid) => sz.rosters.find((r) => r.roster_id === rid)?.owner_id;
+    Object.keys(sz.weekMatchups || {}).map(Number).sort((a, b) => a - b).forEach((week) => {
+      const games = {};
+      (sz.weekMatchups[week] || []).forEach((m) => {
+        if (m.matchup_id == null) return;
+        (games[m.matchup_id] = games[m.matchup_id] || []).push(m);
+      });
+      Object.values(games).forEach((pair) => {
+        if (pair.length !== 2) return;
+        const [a, b] = pair;
+        const pa = a.points ?? 0, pb = b.points ?? 0;
+        if (!pa || !pb) return;
+        const oa = ownerOf(a.roster_id), ob = ownerOf(b.roster_id);
+        if (!oa || !ob) return;
+        const at = { season: sz.season, week };
+
+        // any game played, playoffs included
+        [[a, oa], [b, ob]].forEach(([m, o]) => {
+          if (!highWeek || m.points > highWeek.points) highWeek = { ownerId: o, points: m.points, ...at };
+          const starters = m.starters || [];
+          Object.entries(m.starters_points ? Object.fromEntries(starters.map((pid, i) => [pid, m.starters_points[i]])) : {})
+            .forEach(([pid, pts]) => {
+              if (!pid || pid === "0" || pts == null) return;
+              if (!bestPlayer || pts > bestPlayer.points) bestPlayer = { ownerId: o, playerId: pid, points: pts, ...at };
+            });
+        });
+
+        if (week >= pws) {
+          const round = week - pws + 1;
+          [[a, oa], [b, ob]].forEach(([m, o]) => {
+            const inBracket = (sz.bracket || []).some((g) => g.r === round && (g.t1 === m.roster_id || g.t2 === m.roster_id));
+            if (inBracket && (!highPlayoff || m.points > highPlayoff.points)) highPlayoff = { ownerId: o, points: m.points, ...at };
+          });
+          return;
+        }
+
+        // regular season
+        const margin = Math.abs(pa - pb);
+        const [w, l, wp, lp] = pa >= pb ? [oa, ob, pa, pb] : [ob, oa, pb, pa];
+        const game = { winner: w, loser: l, winnerPts: wp, loserPts: lp, margin, ...at };
+        if (!blowout || margin > blowout.margin) blowout = game;
+        if (!closest || margin < closest.margin) closest = game;
+        if (wp !== lp) {
+          if (!highLoss || lp > highLoss.loserPts) highLoss = game;
+          if (!lowWin || wp < lowWin.winnerPts) lowWin = game;
+        }
+        [[oa, pa], [ob, pb]].forEach(([o, pts]) => {
+          if (!lowGame || pts < lowGame.points) lowGame = { ownerId: o, points: pts, ...at };
+        });
+        careerPA[oa] = (careerPA[oa] || 0) + pb;
+        careerPA[ob] = (careerPA[ob] || 0) + pa;
+        [[oa, pa > pb], [ob, pb > pa]].forEach(([o, won]) => {
+          if (won) {
+            const cur = streaks[o] && streaks[o].len > 0 ? streaks[o] : { len: 0, startSeason: sz.season, startWeek: week };
+            cur.len += 1;
+            cur.endSeason = sz.season; cur.endWeek = week;
+            streaks[o] = cur;
+            if (!longestStreak || cur.len > longestStreak.len) longestStreak = { ownerId: o, ...cur };
+          } else {
+            streaks[o] = { len: 0 };
+          }
+        });
+      });
+    });
+  });
+  let mostPA = null;
+  Object.entries(careerPA).forEach(([ownerId, pts]) => {
+    if (!mostPA || pts > mostPA.points) mostPA = { ownerId, points: pts };
+  });
+  return { blowout, closest, lowGame, longestStreak, mostPA, highWeek, highLoss, lowWin, highPlayoff, bestPlayer };
+}
+
+// Which records were set this season and beat the record going in.
+const RECORD_DEFS = [
+  { key: "highWeek", label: "Highest scoring week", val: (r) => r.points, better: (a, b) => a > b, who: (r) => r.ownerId },
+  { key: "bestPlayer", label: "Best player game", val: (r) => r.points, better: (a, b) => a > b, who: (r) => r.ownerId },
+  { key: "blowout", label: "Biggest blowout", val: (r) => r.margin, better: (a, b) => a > b, who: (r) => r.winner },
+  { key: "closest", label: "Closest game", val: (r) => r.margin, better: (a, b) => a < b, who: (r) => r.winner },
+  { key: "highLoss", label: "Most points in a loss", val: (r) => r.loserPts, better: (a, b) => a > b, who: (r) => r.loser },
+  { key: "lowWin", label: "Fewest points in a win", val: (r) => r.winnerPts, better: (a, b) => a < b, who: (r) => r.winner },
+  { key: "lowGame", label: "Lowest scoring week", val: (r) => r.points, better: (a, b) => a < b, who: (r) => r.ownerId },
+  { key: "highPlayoff", label: "Highest playoff score", val: (r) => r.points, better: (a, b) => a > b, who: (r) => r.ownerId },
+  { key: "longestStreak", label: "Longest win streak", val: (r) => r.len, better: (a, b) => a > b, who: (r) => r.ownerId, seasonOf: (r) => r.endSeason },
+];
+function recordsBrokenThisSeason(all, before, season) {
+  return RECORD_DEFS.filter((d) => {
+    const now = all[d.key], old = before[d.key];
+    if (!now || !old) return false;
+    const setIn = d.seasonOf ? d.seasonOf(now) : now.season;
+    return String(setIn) === season && d.better(d.val(now), d.val(old));
+  }).map((d) => ({ ...d, now: all[d.key], old: before[d.key] }));
+}
+
+
 // Shared across Home and Rosters: every all-time aggregation (champions,
 // wall of shame, and the 8 league-wide superlative titles) computed once
 // from a single source of truth, so both pages always agree on who holds what.
 function useLeagueSuperlatives(data, standings, usersById) {
-  const { league, weekMatchups, rosters, users } = data;
+  const { league, weekMatchups, rosters, users, currentBracket } = data;
   const pastSeasons = data.seasonHistory;
 
   // Once this season's final is played, treat it like a completed season
@@ -7668,69 +7794,23 @@ function useLeagueSuperlatives(data, standings, usersById) {
 
   // Game-level records across every linked season, regular season only
   // (playoff and consolation weeks skipped), ignoring unplayed 0-0 games.
-  const gameRecords = useMemo(() => {
-    const seasons = [
-      ...pastSeasons.map((s) => ({
-        season: s.season, weekMatchups: s.weekMatchups || {}, rosters: s.rosters || [],
-        playoffWeekStart: s.playoffWeekStart || 15,
-      })),
-      {
-        season: league?.season, weekMatchups: weekMatchups || {}, rosters,
-        playoffWeekStart: league?.settings?.playoff_week_start || 15,
-      },
-    ].sort((a, b) => Number(a.season) - Number(b.season));
-
-    let blowout = null, closest = null, lowGame = null, longestStreak = null;
-    const careerPA = {};
-    const streaks = {}; // ownerId -> { len, startSeason, startWeek }
-
-    seasons.forEach((sz) => {
-      const ownerOf = (rid) => sz.rosters.find((r) => r.roster_id === rid)?.owner_id;
-      Object.keys(sz.weekMatchups).map(Number).sort((a, b) => a - b).forEach((week) => {
-        if (week >= sz.playoffWeekStart) return;
-        const byId = {};
-        (sz.weekMatchups[week] || []).forEach((m) => {
-          if (m.matchup_id == null) return;
-          (byId[m.matchup_id] = byId[m.matchup_id] || []).push(m);
-        });
-        Object.values(byId).forEach((pair) => {
-          if (pair.length !== 2) return;
-          const [a, b] = pair;
-          const pa = a.points ?? 0, pb = b.points ?? 0;
-          if (!pa || !pb) return;
-          const oa = ownerOf(a.roster_id), ob = ownerOf(b.roster_id);
-          if (!oa || !ob) return;
-          const margin = Math.abs(pa - pb);
-          const [w, l, wp, lp] = pa >= pb ? [oa, ob, pa, pb] : [ob, oa, pb, pa];
-          const game = { winner: w, loser: l, winnerPts: wp, loserPts: lp, margin, week, season: sz.season };
-          if (!blowout || margin > blowout.margin) blowout = game;
-          if (!closest || margin < closest.margin) closest = game;
-          [[oa, pa], [ob, pb]].forEach(([o, pts]) => {
-            if (!lowGame || pts < lowGame.points) lowGame = { ownerId: o, points: pts, week, season: sz.season };
-          });
-          careerPA[oa] = (careerPA[oa] || 0) + pb;
-          careerPA[ob] = (careerPA[ob] || 0) + pa;
-          [[oa, pa > pb], [ob, pb > pa]].forEach(([o, won]) => {
-            if (won) {
-              const cur = streaks[o] && streaks[o].len > 0 ? streaks[o] : { len: 0, startSeason: sz.season, startWeek: week };
-              cur.len += 1;
-              cur.endSeason = sz.season; cur.endWeek = week;
-              streaks[o] = cur;
-              if (!longestStreak || cur.len > longestStreak.len) longestStreak = { ownerId: o, ...cur };
-            } else {
-              streaks[o] = { len: 0 };
-            }
-          });
-        });
-      });
+  // Every game-level record comes from one engine (computeRecordBook), so the
+  // cards, the trophy case, and the "record broken" callout always agree.
+  // Running it once without this season tells us which records fell this year.
+  const { gameRecords, newRecords } = useMemo(() => {
+    const toInput = (s) => ({
+      season: s.season, weekMatchups: s.weekMatchups || {}, rosters: s.rosters || [],
+      playoffWeekStart: s.playoffWeekStart || 15, bracket: s.bracket || [],
     });
-
-    let mostPA = null;
-    Object.entries(careerPA).forEach(([ownerId, pts]) => {
-      if (!mostPA || pts > mostPA.points) mostPA = { ownerId, points: pts };
+    const past = pastSeasons.map(toInput);
+    const current = toInput({
+      season: league?.season, weekMatchups, rosters,
+      playoffWeekStart: league?.settings?.playoff_week_start, bracket: currentBracket,
     });
-    return { blowout, closest, lowGame, longestStreak, mostPA };
-  }, [pastSeasons, weekMatchups, rosters, league]);
+    const all = computeRecordBook([...past, current]);
+    const before = past.length ? computeRecordBook(past) : null;
+    return { gameRecords: all, newRecords: before ? recordsBrokenThisSeason(all, before, String(league?.season)) : [] };
+  }, [pastSeasons, weekMatchups, rosters, league, currentBracket]);
 
   const mostCareerPoints = useMemo(() => {
     const totals = {};
@@ -7745,7 +7825,7 @@ function useLeagueSuperlatives(data, standings, usersById) {
   return {
     championsByOwner, orderedTitles, currentSeasonSuper, ownerForRoster, wallOfShame,
     historyRows, ownerDirectory, allSeasonEntries, allTimeSuperlatives, mostTitles,
-    teamNameIn, gameRecords, mostCareerPoints, currentResult,
+    teamNameIn, gameRecords, newRecords, mostCareerPoints, currentResult,
   };
 }
 
@@ -7811,12 +7891,62 @@ function PodiumRow({ season, champion, runnerUp, third }) {
   );
 }
 
+// "Record broken" callout on Home: every all-time record that fell this
+// season, with who held it before. Resets on its own when the league
+// rolls over to a new season.
+function recordLine(d, r, teamNameIn, playerLabel) {
+  const t = (oid) => teamNameIn(oid, d.seasonOf ? d.seasonOf(r) : r.season) || "?";
+  switch (d.key) {
+    case "highWeek": case "lowGame": case "highPlayoff":
+      return `${t(r.ownerId)}, ${fmt(r.points)} pts (Week ${r.week}, ${r.season})`;
+    case "bestPlayer":
+      return `${playerLabel(r.playerId)} for ${t(r.ownerId)}, ${fmt(r.points)} pts (Week ${r.week}, ${r.season})`;
+    case "blowout":
+      return `${t(r.winner)} by ${fmt(r.margin)} over ${t(r.loser)} (Week ${r.week}, ${r.season})`;
+    case "closest":
+      return `${t(r.winner)} by ${fmt(r.margin, 2)} over ${t(r.loser)} (Week ${r.week}, ${r.season})`;
+    case "highLoss":
+      return `${t(r.loser)}, ${fmt(r.loserPts)} pts in a loss to ${t(r.winner)} (Week ${r.week}, ${r.season})`;
+    case "lowWin":
+      return `${t(r.winner)}, ${fmt(r.winnerPts)} pts in a win over ${t(r.loser)} (Week ${r.week}, ${r.season})`;
+    case "longestStreak":
+      return `${t(r.ownerId)}, ${r.len} straight (ending Week ${r.endWeek}, ${r.endSeason})`;
+    default:
+      return "";
+  }
+}
+function RecordsBroken({ records, season, ownerById, teamNameIn, playerLabel }) {
+  if (!records || !records.length) return null;
+  return (
+    <div style={{ marginBottom: 22 }}>
+      <SectionLabel>Record broken · {season}</SectionLabel>
+      <Card style={{ padding: "12px 14px", borderLeft: `4px solid ${COLORS.pylon}`, background: "#FFF8F1" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {records.map((d) => {
+            const holder = ownerById(d.who(d.now));
+            return (
+              <div key={d.key} style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+                <Crest name={holder ? teamName(holder) : "-"} logo={holder ? avatarUrl(holder) : null} size={28} />
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: COLORS.pylon }}>🚨 {d.label}</div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: COLORS.bone }}>{recordLine(d, d.now, teamNameIn, playerLabel)}</div>
+                  <div style={{ fontSize: 12, color: COLORS.muted }}>Old record: {recordLine(d, d.old, teamNameIn, playerLabel)}</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
   const { league, seasonHistory, rosters, players, seasonType } = data;
   const {
     championsByOwner, orderedTitles, currentSeasonSuper, ownerForRoster,
     wallOfShame, historyRows, ownerDirectory, allTimeSuperlatives, mostTitles,
-    teamNameIn, gameRecords, mostCareerPoints,
+    teamNameIn, gameRecords, newRecords, mostCareerPoints,
   } = superlatives;
   const ownerById = (id) => (id && (usersById[id] || ownerDirectory[id])) || null;
   // "2025 as Bijan al-Gaib" for a record set in a specific season
@@ -7896,6 +8026,8 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
       {offseasonMode
         ? <OffseasonHub data={data} standings={standings} usersById={usersById} superlatives={superlatives} />
         : <ThisWeek data={data} standings={standings} usersById={usersById} />}
+
+      <RecordsBroken records={newRecords} season={league?.season} ownerById={ownerById} teamNameIn={teamNameIn} playerLabel={playerLabel} />
 
       {/* Champions banner strip: rafter banners */}
       {(orderedTitles.length > 0 || showOpenBanner) && (
@@ -8168,6 +8300,7 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
                   note: A.highestScoringSeason ? asOf(A.highestScoringSeason.ownerId, A.highestScoringSeason.season) : null,
                 },
                 ...pick(G.longestStreak, {
+                  key: "longestStreak",
                   label: "Longest win streak",
                   value: G.longestStreak ? `${G.longestStreak.len} straight` : "-",
                   user: ownerById(G.longestStreak?.ownerId),
@@ -8179,13 +8312,23 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
                   note: G.longestStreak ? asOf(G.longestStreak.ownerId, G.longestStreak.endSeason) : null,
                 }),
                 {
+                  key: "highWeek",
                   label: "Highest scoring week",
-                  value: A.singleGame ? `${fmt(A.singleGame.points)} pts` : "-",
-                  user: currentUser(A.singleGame?.owner),
-                  sub: A.singleGame ? `Week ${A.singleGame.week}` : null,
-                  note: A.singleGame ? asOf(A.singleGame.owner?.user_id, A.singleGame.season) : null,
+                  value: G.highWeek ? `${fmt(G.highWeek.points)} pts` : "-",
+                  user: ownerById(G.highWeek?.ownerId),
+                  sub: G.highWeek ? `Week ${G.highWeek.week}` : null,
+                  note: G.highWeek ? asOf(G.highWeek.ownerId, G.highWeek.season) : null,
                 },
+                ...pick(G.highPlayoff, {
+                  key: "highPlayoff",
+                  label: "Highest playoff score",
+                  value: G.highPlayoff ? `${fmt(G.highPlayoff.points)} pts` : "-",
+                  user: ownerById(G.highPlayoff?.ownerId),
+                  sub: G.highPlayoff ? `Week ${G.highPlayoff.week}` : null,
+                  note: G.highPlayoff ? asOf(G.highPlayoff.ownerId, G.highPlayoff.season) : null,
+                }),
                 ...pick(G.lowGame, {
+                  key: "lowGame",
                   label: "Lowest scoring week",
                   value: G.lowGame ? `${fmt(G.lowGame.points)} pts` : "-",
                   user: ownerById(G.lowGame?.ownerId),
@@ -8193,6 +8336,7 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
                   note: G.lowGame ? asOf(G.lowGame.ownerId, G.lowGame.season) : null,
                 }),
                 ...pick(G.blowout, {
+                  key: "blowout",
                   label: "Biggest blowout",
                   value: G.blowout ? `+${fmt(G.blowout.margin)}` : "-",
                   user: ownerById(G.blowout?.winner),
@@ -8200,24 +8344,43 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
                   note: G.blowout ? asOf(G.blowout.winner, G.blowout.season) : null,
                 }),
                 ...pick(G.closest, {
+                  key: "closest",
                   label: "Closest game",
                   value: G.closest ? `${fmt(G.closest.margin, 2)} pts` : "-",
                   user: ownerById(G.closest?.winner),
                   sub: G.closest ? `${fmt(G.closest.winnerPts)} to ${fmt(G.closest.loserPts)} over ${teamNameIn(G.closest.loser, G.closest.season) || "?"}, Week ${G.closest.week}` : null,
                   note: G.closest ? asOf(G.closest.winner, G.closest.season) : null,
                 }),
+                ...pick(G.highLoss, {
+                  key: "highLoss",
+                  label: "Most points in a loss",
+                  value: G.highLoss ? `${fmt(G.highLoss.loserPts)} pts` : "-",
+                  user: ownerById(G.highLoss?.loser),
+                  sub: G.highLoss ? `Lost to ${teamNameIn(G.highLoss.winner, G.highLoss.season) || "?"} (${fmt(G.highLoss.winnerPts)}), Week ${G.highLoss.week}` : null,
+                  note: G.highLoss ? asOf(G.highLoss.loser, G.highLoss.season) : null,
+                }),
+                ...pick(G.lowWin, {
+                  key: "lowWin",
+                  label: "Fewest points in a win",
+                  value: G.lowWin ? `${fmt(G.lowWin.winnerPts)} pts` : "-",
+                  user: ownerById(G.lowWin?.winner),
+                  sub: G.lowWin ? `Beat ${teamNameIn(G.lowWin.loser, G.lowWin.season) || "?"} (${fmt(G.lowWin.loserPts)}), Week ${G.lowWin.week}` : null,
+                  note: G.lowWin ? asOf(G.lowWin.winner, G.lowWin.season) : null,
+                }),
                 {
+                  key: "bestPlayer",
                   label: "Best player game",
-                  value: A.bestPlayerRecord ? `${fmt(A.bestPlayerRecord.points)} pts` : "-",
-                  user: currentUser(A.bestPlayerRecord?.owner),
-                  sub: A.bestPlayerRecord ? `${playerLabel(A.bestPlayerRecord.playerId)}, Week ${A.bestPlayerRecord.week}` : null,
-                  note: A.bestPlayerRecord ? asOf(A.bestPlayerRecord.owner?.user_id, A.bestPlayerRecord.season) : null,
+                  value: G.bestPlayer ? `${fmt(G.bestPlayer.points)} pts` : "-",
+                  user: ownerById(G.bestPlayer?.ownerId),
+                  sub: G.bestPlayer ? `${playerLabel(G.bestPlayer.playerId)}, Week ${G.bestPlayer.week}` : null,
+                  note: G.bestPlayer ? asOf(G.bestPlayer.ownerId, G.bestPlayer.season) : null,
                 },
               ];
               return cards.map((c, i) => (
                 <SuperlativeCard
                   key={c.label}
                   accent={SUPERLATIVE_ACCENTS[i % SUPERLATIVE_ACCENTS.length]}
+                  isNew={c.key && (newRecords || []).some((r) => r.key === c.key) ? String(league?.season) : null}
                   label={c.label}
                   value={c.value}
                   user={c.user}
@@ -8235,12 +8398,17 @@ function HomeTab({ data, standings, usersById, superlatives, rostersById }) {
 
 const SUPERLATIVE_ACCENTS = ["#B58A00", "#0E4D33", "#E35F00", "#1A1A1A", "#8E6F3E", "#3F7A63", "#B58A00", "#0E4D33"];
 
-function SuperlativeCard({ label, value, user, accent, sublabel, note }) {
+function SuperlativeCard({ label, value, user, accent, sublabel, note, isNew }) {
   return (
     <Card className="sup-card" style={{ padding: "11px 14px", borderLeft: `3px solid ${accent}` }}>
       <div className="sup-top" style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10 }}>
         <div style={{ fontSize: 11, color: COLORS.muted, textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600 }}>
           {label}
+          {isNew && (
+            <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 800, color: "#FFFFFF", background: COLORS.pylon, padding: "2px 5px", borderRadius: 4, letterSpacing: "0.05em", verticalAlign: "1px" }}>
+              NEW {isNew}
+            </span>
+          )}
         </div>
         <div className="sup-value" style={{ fontFamily: "'Archivo Black', sans-serif", fontSize: 16, color: accent, whiteSpace: "nowrap" }}>
           {value}
