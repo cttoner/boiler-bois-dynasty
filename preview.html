@@ -5298,7 +5298,7 @@ function TeamWindows({ rosters, players, standings, seasonHistory, usersById, se
                   <div style={{ position: "absolute", top: 8, left: 0, right: 0, height: 2, background: COLORS.hairline }} />
                   <div style={{ position: "absolute", top: 2, bottom: 2, left: `${pct(w.leagueAvg)}%`, width: 1, background: COLORS.muted, opacity: 0.6 }} />
                   <div style={{ position: "absolute", top: 3, left: `calc(${pct(r.starters.age)}% - 6px)`, width: 12, height: 12, borderRadius: 6, background: win.color }} />
-                  <div style={{ position: "absolute", top: 1, ...(pct(r.starters.age) > 65 ? { right: `calc(${100 - pct(r.starters.age)}% + 9px)` } : { left: `calc(${pct(r.starters.age)}% + 9px)` }), fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", color: COLORS.bone }} className="window-age">{fmt(r.starters.age, 1)}</div>
+                  <div style={{ position: "absolute", top: 1, ...(pct(r.starters.age) > 65 ? { right: `calc(${100 - pct(r.starters.age)}% + 9px)` } : { left: `calc(${pct(r.starters.age)}% + 9px)` }), fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", color: COLORS.bone, background: active ? COLORS.yellowTint : COLORS.surface, padding: "0 2px", lineHeight: "14px" }} className="window-age">{fmt(r.starters.age, 1)}</div>
                 </div>
                 <span style={{ justifySelf: "end", fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 999, color: win.color, background: win.tint, whiteSpace: "nowrap" }}>{win.label}</span>
               </button>
